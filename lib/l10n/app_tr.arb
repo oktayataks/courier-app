@@ -1,0 +1,7 @@
+{
+  "@@locale": "tr",
+  "appTitle": "Kurye Paneli",
+  "@appTitle": {
+    "description": "Uygulama başlığı"
+  }
+}
