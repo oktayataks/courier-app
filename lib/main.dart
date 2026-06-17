@@ -1,3 +1,4 @@
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -6,6 +7,7 @@ import 'package:intl/date_symbol_data_local.dart';
 import 'config/constants.dart';
 import 'config/routes.dart';
 import 'config/theme.dart';
+import 'services/notification_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -26,8 +28,8 @@ Future<void> main() async {
 
   await initializeDateFormatting('tr_TR');
 
-  // Firebase initialization is intentionally deferred until configuration files
-  // (google-services.json / GoogleService-Info.plist) are added to the project.
+  await Firebase.initializeApp();
+  await NotificationService().initialize();
 
   runApp(
     const ProviderScope(

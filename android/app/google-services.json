@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "828882094070",
+    "project_id": "taby-kurye",
+    "storage_bucket": "taby-kurye.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:828882094070:android:dc5e7a017c1568be40a9d7",
+        "android_client_info": {
+          "package_name": "com.example.courier.courier_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAN8lVk3jWhXNFMHrFehZAoInuzbz6cWY0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

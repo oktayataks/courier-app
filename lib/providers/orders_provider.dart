@@ -46,37 +46,54 @@ class OrdersNotifier extends StateNotifier<OrdersState> {
     state = state.copyWith(isLoading: true, error: null);
     try {
       final token = await StorageService.getToken();
-      final response = await http.get(
-        Uri.parse('${AppConstants.apiBaseUrl}/orders'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json',
-        },
-      );
+      final headers = {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      };
 
-      if (response.statusCode == 200) {
-        final raw = json.decode(response.body);
+      final results = await Future.wait([
+        http.get(
+          Uri.parse('${AppConstants.apiBaseUrl}/orders/available'),
+          headers: headers,
+        ),
+        http.get(
+          Uri.parse('${AppConstants.apiBaseUrl}/orders/my-orders'),
+          headers: headers,
+        ),
+      ]);
+
+      final availableResponse = results[0];
+      final myOrdersResponse = results[1];
+
+      List<Order> availableOrders = [];
+      List<Order> myOrders = [];
+
+      if (availableResponse.statusCode == 200) {
+        final raw = json.decode(availableResponse.body);
         final List<dynamic> data =
             raw is List ? raw : (raw['data'] as List? ?? []);
-        final orders = data.map((o) => Order.fromJson(o)).toList();
-
-        state = state.copyWith(
-          availableOrders: orders
-              .where((o) => o.status == OrderStatus.pending)
-              .toList(),
-          activeOrders: orders
-              .where((o) =>
-                  o.status == OrderStatus.assigned ||
-                  o.status == OrderStatus.pickedUp)
-              .toList(),
-          completedOrders: orders
-              .where((o) => o.status == OrderStatus.delivered)
-              .toList(),
-          isLoading: false,
-        );
-      } else {
-        throw Exception('Siparişler yüklenemedi: ${response.statusCode}');
+        availableOrders = data.map((o) => Order.fromJson(o)).toList();
       }
+
+      if (myOrdersResponse.statusCode == 200) {
+        final raw = json.decode(myOrdersResponse.body);
+        final List<dynamic> data =
+            raw is List ? raw : (raw['data'] as List? ?? []);
+        myOrders = data.map((o) => Order.fromJson(o)).toList();
+      }
+
+      state = state.copyWith(
+        availableOrders: availableOrders,
+        activeOrders: myOrders
+            .where((o) =>
+                o.status == OrderStatus.assigned ||
+                o.status == OrderStatus.pickedUp)
+            .toList(),
+        completedOrders: myOrders
+            .where((o) => o.status == OrderStatus.delivered)
+            .toList(),
+        isLoading: false,
+      );
     } catch (e) {
       state = state.copyWith(isLoading: false, error: e.toString());
     }

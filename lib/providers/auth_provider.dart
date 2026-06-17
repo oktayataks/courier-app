@@ -1,10 +1,13 @@
 import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../config/constants.dart';
 import '../models/user.dart';
 import '../services/api_service.dart';
+import '../services/location_service.dart';
+import '../services/notification_service.dart';
 
 final apiServiceProvider = Provider<ApiService>((ref) => ApiService());
 
@@ -115,15 +118,64 @@ class AuthNotifier extends StateNotifier<AuthState> {
         user: user,
         isLoading: false,
       );
+
+      print('🚀 Login başarılı, userId: ${user.id}');
+      _setupCourierServices(user.id, accessToken);
     } catch (e) {
       state = state.copyWith(isLoading: false, error: e.toString());
       rethrow;
     }
   }
 
+  Future<void> _setupCourierServices(String userId, String token) async {
+    print('🔍 Courier aranıyor, userId: $userId');
+    try {
+      final res = await http.get(
+        Uri.parse('${AppConstants.apiBaseUrl}/couriers/me'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+      );
+
+      print('🔍 Courier/me response status: ${res.statusCode}');
+      print('🔍 Courier/me response: ${res.body}');
+
+      if (res.statusCode != 200) return;
+
+      final courierData = json.decode(res.body) as Map<String, dynamic>;
+      final courierId = courierData['id']?.toString();
+
+      print('🔍 Courier ID: $courierId');
+
+      if (courierId == null || courierId.isEmpty) return;
+      LocationService.startBackendTracking(courierId);
+
+      final fcmToken = await NotificationService().getFCMToken();
+      print('🔍 FCM token: $fcmToken');
+
+      if (fcmToken != null) {
+        final fcmRes = await http.patch(
+          Uri.parse(
+            '${AppConstants.apiBaseUrl}/couriers/$courierId/fcm-token',
+          ),
+          headers: {
+            'Authorization': 'Bearer $token',
+            'Content-Type': 'application/json',
+          },
+          body: json.encode({'fcmToken': fcmToken}),
+        );
+        print('✅ FCM token kaydedildi! Status: ${fcmRes.statusCode}');
+      }
+    } catch (e) {
+      print('❌ _setupCourierServices hata: $e');
+    }
+  }
+
   Future<void> logout() async {
     state = state.copyWith(isLoading: true);
     try {
+      LocationService.stopBackendTracking();
       await _apiService.clearToken();
       await _storage.delete(key: AppConstants.refreshTokenKey);
       final prefs = await SharedPreferences.getInstance();

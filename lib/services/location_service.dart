@@ -1,6 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
+import '../config/constants.dart';
+import 'storage_service.dart';
 
 class LocationService {
   static final LocationService _instance = LocationService._internal();
@@ -14,6 +18,9 @@ class LocationService {
   Stream<Position> get positionStream => _positionController.stream;
 
   bool get isTracking => _positionStream != null;
+
+  static Timer? _timer;
+  static String? _courierId;
 
   // ----- İzin yönetimi -----
 
@@ -119,6 +126,60 @@ class LocationService {
       return await locationFromAddress(address);
     } catch (_) {
       return [];
+    }
+  }
+
+  // ----- Backend'e periyodik konum gönderimi -----
+
+  static Future<bool> requestPermission() async {
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    return permission == LocationPermission.always ||
+        permission == LocationPermission.whileInUse;
+  }
+
+  static Future<void> startBackendTracking(String courierId) async {
+    _courierId = courierId;
+    final hasPermission = await requestPermission();
+    if (!hasPermission) return;
+
+    _timer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _sendLocation(),
+    );
+    await _sendLocation();
+  }
+
+  static void stopBackendTracking() {
+    _timer?.cancel();
+    _timer = null;
+  }
+
+  static Future<void> _sendLocation() async {
+    try {
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+      final token = await StorageService.getToken();
+      if (token == null || _courierId == null) return;
+
+      await http.patch(
+        Uri.parse(
+          '${AppConstants.apiBaseUrl}/couriers/$_courierId/location',
+        ),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+        body: json.encode({
+          'latitude': position.latitude,
+          'longitude': position.longitude,
+        }),
+      );
+    } catch (e) {
+      // ignore
     }
   }
 

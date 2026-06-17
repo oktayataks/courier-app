@@ -5,6 +5,7 @@ import '../config/theme.dart';
 import '../providers/auth_provider.dart';
 import '../providers/courier_provider.dart';
 import '../providers/orders_provider.dart';
+import '../services/location_service.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/logo_background.dart';
 import '../widgets/order_card.dart';
@@ -21,10 +22,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    Future.microtask(() {
+    Future.microtask(() async {
       if (!mounted) return;
-      ref.read(courierProvider.notifier).loadCourier();
+      await ref.read(courierProvider.notifier).loadCourier();
       ref.read(ordersProvider.notifier).loadOrders();
+
+      final courier = ref.read(courierProvider);
+      if (courier != null) {
+        LocationService.startBackendTracking(courier.id);
+      }
     });
   }
 
