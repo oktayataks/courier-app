@@ -9,6 +9,8 @@ import 'config/routes.dart';
 import 'config/theme.dart';
 import 'services/notification_service.dart';
 
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -44,6 +46,7 @@ class CourierApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: navigatorKey,
       title: AppConstants.appName,
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,

@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../config/constants.dart';
 import '../config/routes.dart';
 import '../config/theme.dart';
 import '../providers/auth_provider.dart';
 import '../providers/courier_provider.dart';
 import '../providers/orders_provider.dart';
-import '../services/location_service.dart';
 import '../widgets/app_logo.dart';
 import '../widgets/logo_background.dart';
 import '../widgets/order_card.dart';
@@ -22,15 +22,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    Future.microtask(() async {
+    Future.microtask(() {
       if (!mounted) return;
-      await ref.read(courierProvider.notifier).loadCourier();
+      ref.read(courierProvider.notifier).loadCourier();
       ref.read(ordersProvider.notifier).loadOrders();
-
-      final courier = ref.read(courierProvider);
-      if (courier != null) {
-        LocationService.startBackendTracking(courier.id);
-      }
     });
   }
 
@@ -145,6 +140,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               ),
             ),
           ),
+          _buildActiveOrderBanner(context),
           Expanded(
             child: ordersAsync.when(
               data: (orders) {
@@ -182,6 +178,23 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       return OrderCard(
                         order: order,
                         onTap: () {
+                          final ordersState = ref.read(ordersProvider);
+                          final hasActiveOrder =
+                              ordersState.activeOrders.isNotEmpty;
+
+                          if (order.status == OrderStatus.pending &&
+                              hasActiveOrder) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content:
+                                    Text('⚠️ Önce aktif siparişini tamamla!'),
+                                backgroundColor: Colors.orange,
+                                duration: Duration(seconds: 2),
+                              ),
+                            );
+                            return;
+                          }
+
                           Navigator.push(
                             context,
                             MaterialPageRoute(
@@ -232,6 +245,44 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             ),
           ),
         ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActiveOrderBanner(BuildContext context) {
+    final ordersState = ref.watch(ordersProvider);
+    if (ordersState.activeOrders.isEmpty) return const SizedBox.shrink();
+
+    final activeOrder = ordersState.activeOrders.first;
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => OrderDetailScreen(order: activeOrder),
+          ),
+        );
+      },
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        color: Colors.orange,
+        child: Row(
+          children: [
+            const Icon(Icons.delivery_dining, color: Colors.white),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '🚴 Aktif Sipariş: #${activeOrder.orderNumber}',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            const Icon(Icons.arrow_forward_ios, color: Colors.white, size: 16),
+          ],
         ),
       ),
     );

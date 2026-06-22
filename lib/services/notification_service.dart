@@ -1,7 +1,10 @@
 import 'dart:io';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import '../config/routes.dart';
+import '../main.dart' show navigatorKey;
 
 @pragma('vm:entry-point')
 Future<void> _firebaseBackgroundHandler(RemoteMessage message) async {
@@ -31,6 +34,16 @@ class NotificationService {
     _setupForegroundMessageHandler();
     _setupBackgroundMessageHandler();
     FirebaseMessaging.onBackgroundMessage(_firebaseBackgroundHandler);
+
+    final initialMessage = await _firebaseMessaging.getInitialMessage();
+    if (initialMessage != null) {
+      final orderId = initialMessage.data['orderId'];
+      if (orderId != null) {
+        Future.delayed(const Duration(seconds: 1), () {
+          _navigateToOrders();
+        });
+      }
+    }
   }
 
   Future<void> _requestPermissions() async {
@@ -83,7 +96,11 @@ class NotificationService {
 
   void _setupBackgroundMessageHandler() {
     FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-      // Handle notification tap when app is in background
+      print('📬 Bildirime tıklandı: ${message.data}');
+      final orderId = message.data['orderId'];
+      if (orderId != null) {
+        _navigateToOrders();
+      }
     });
   }
 
@@ -124,7 +141,14 @@ class NotificationService {
   }
 
   void _onNotificationTap(NotificationResponse response) {
-    // Handle notification tap
+    _navigateToOrders();
+  }
+
+  static void _navigateToOrders() {
+    navigatorKey.currentState?.pushNamedAndRemoveUntil(
+      AppRoutes.home,
+      (route) => false,
+    );
   }
 
   Future<String?> getFCMToken() async {
