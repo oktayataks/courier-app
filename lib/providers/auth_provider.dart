@@ -128,7 +128,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> _setupCourierServices(String userId, String token) async {
-    print('🔍 Courier aranıyor, userId: $userId');
+    print('🔍 _setupCourierServices başladı: $userId');
     try {
       final res = await http.get(
         Uri.parse('${AppConstants.apiBaseUrl}/couriers/me'),
@@ -138,18 +138,28 @@ class AuthNotifier extends StateNotifier<AuthState> {
         },
       );
 
-      print('🔍 Courier/me response status: ${res.statusCode}');
-      print('🔍 Courier/me response: ${res.body}');
+      print('🔍 /couriers/me status: ${res.statusCode}');
+      print('🔍 /couriers/me body: ${res.body}');
 
-      if (res.statusCode != 200) return;
+      if (res.statusCode != 200) {
+        print('❌ Courier bulunamadı!');
+        return;
+      }
 
-      final courierData = json.decode(res.body) as Map<String, dynamic>;
+      final courierData = json.decode(res.body);
+      print('🔍 courierData: $courierData');
+
       final courierId = courierData['id']?.toString();
+      print('🔍 courierId: $courierId');
 
-      print('🔍 Courier ID: $courierId');
-
-      if (courierId == null || courierId.isEmpty) return;
-      LocationService.startBackendTracking(courierId);
+      if (courierId == null || courierId.isEmpty) {
+        print('❌ Courier ID boş!');
+        return;
+      }
+      print('🔍 Courier ID bulundu: $courierId');
+      print('🔍 Tracking başlatılıyor...');
+      await LocationService.startBackendTracking(courierId);
+      print('✅ Tracking başlatıldı!');
 
       final fcmToken = await NotificationService().getFCMToken();
       print('🔍 FCM token: $fcmToken');

@@ -141,19 +141,14 @@ class LocationService {
   }
 
   static Future<void> startBackendTracking(String courierId) async {
-    final uuidRegex = RegExp(
-      r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
-      caseSensitive: false,
-    );
-
-    if (!uuidRegex.hasMatch(courierId)) {
-      print('❌ Geçersiz courier ID, tracking başlatılmıyor: $courierId');
-      return;
-    }
+    if (courierId.isEmpty) return;
 
     _courierId = courierId;
     final hasPermission = await requestPermission();
-    if (!hasPermission) return;
+    if (!hasPermission) {
+      print('❌ Konum izni yok!');
+      return;
+    }
 
     _timer?.cancel();
     _timer = Timer.periodic(
@@ -171,8 +166,8 @@ class LocationService {
   }
 
   static Future<void> _sendLocation() async {
+    print('📍 _sendLocation çağrıldı, courierId: $_courierId');
     print('📍 Konum gönderiliyor...');
-    print('📍 Courier ID: $_courierId');
 
     if (_courierId == null) {
       print('❌ Courier ID yok!');
@@ -185,6 +180,11 @@ class LocationService {
       );
       print('📍 Pozisyon: ${position.latitude}, ${position.longitude}');
 
+      if (position.latitude == 0 && position.longitude == 0) {
+        print('❌ Koordinatlar 0,0 geçersiz!');
+        return;
+      }
+
       final token = await StorageService.getToken();
 
       final response = await http.patch(
@@ -196,8 +196,8 @@ class LocationService {
           'Content-Type': 'application/json',
         },
         body: json.encode({
-          'latitude': position.latitude,
-          'longitude': position.longitude,
+          'latitude': position.latitude.toDouble(),
+          'longitude': position.longitude.toDouble(),
         }),
       );
 
