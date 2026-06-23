@@ -7,6 +7,8 @@ import '../config/constants.dart';
 import 'storage_service.dart';
 
 class LocationService {
+  // ----- Instance API (location_provider.dart için) -----
+
   static final LocationService _instance = LocationService._internal();
   factory LocationService() => _instance;
   LocationService._internal();
@@ -16,41 +18,23 @@ class LocationService {
       StreamController<Position>.broadcast();
 
   Stream<Position> get positionStream => _positionController.stream;
-
   bool get isTracking => _positionStream != null;
-
-  static Timer? _timer;
-  static String? _courierId;
-
-  // ----- İzin yönetimi -----
 
   Future<bool> checkPermission() async {
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      return false;
-    }
-
+    if (!serviceEnabled) return false;
     var permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
-        return false;
-      }
+      if (permission == LocationPermission.denied) return false;
     }
-
-    if (permission == LocationPermission.deniedForever) {
-      return false;
-    }
-
+    if (permission == LocationPermission.deniedForever) return false;
     return true;
   }
-
-  // ----- Mevcut konum -----
 
   Future<Position?> getCurrentPosition() async {
     final hasPermission = await checkPermission();
     if (!hasPermission) return null;
-
     try {
       return await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
@@ -61,25 +45,19 @@ class LocationService {
     }
   }
 
-  // ----- Konum takibi -----
-
   Future<void> startTracking() async {
     if (_positionStream != null) return;
-
     final hasPermission = await checkPermission();
     if (!hasPermission) return;
-
     const locationSettings = LocationSettings(
       accuracy: LocationAccuracy.high,
       distanceFilter: 10,
     );
-
     _positionStream = Geolocator.getPositionStream(
       locationSettings: locationSettings,
     ).listen(
       (position) => _positionController.add(position),
       onError: (Object error) {
-        // İsteğe bağlı: hatayı subscribe edenlere ilet
         if (!_positionController.isClosed) {
           _positionController.addError(error);
         }
@@ -92,8 +70,6 @@ class LocationService {
     _positionStream = null;
   }
 
-  // ----- Mesafe -----
-
   double calculateDistance(
     double startLat,
     double startLng,
@@ -102,8 +78,6 @@ class LocationService {
   ) {
     return Geolocator.distanceBetween(startLat, startLng, endLat, endLng);
   }
-
-  // ----- Geocoding (mevcut servisten korundu) -----
 
   Future<String?> getAddressFromCoordinates(
     double latitude,
@@ -129,13 +103,29 @@ class LocationService {
     }
   }
 
-  // ----- Backend'e periyodik konum gönderimi -----
+  void dispose() {
+    _positionStream?.cancel();
+    _positionStream = null;
+    if (!_positionController.isClosed) {
+      _positionController.close();
+    }
+  }
+
+  // ----- Static API (backend konum gönderimi) -----
+
+  static StreamSubscription<Position>? _backendStream;
+  static String? _courierId;
+  static DateTime? _lastSent;
 
   static Future<bool> requestPermission() async {
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) return false;
+
     LocationPermission permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
     }
+    if (permission == LocationPermission.deniedForever) return false;
     return permission == LocationPermission.always ||
         permission == LocationPermission.whileInUse;
   }
@@ -144,48 +134,53 @@ class LocationService {
     if (courierId.isEmpty) return;
 
     _courierId = courierId;
+    print('🚀 Tracking başladı: $courierId');
+
     final hasPermission = await requestPermission();
     if (!hasPermission) {
       print('❌ Konum izni yok!');
       return;
     }
 
-    _timer?.cancel();
-    _timer = Timer.periodic(
-      const Duration(seconds: 30),
-      (_) => _sendLocation(),
+    await _backendStream?.cancel();
+
+    const locationSettings = LocationSettings(
+      accuracy: LocationAccuracy.high,
+      distanceFilter: 10,
     );
 
-    await _sendLocation();
-    print('🚀 Location tracking başladı: $courierId');
+    _backendStream = Geolocator.getPositionStream(
+      locationSettings: locationSettings,
+    ).listen(
+      (Position position) async {
+        print('📍 Stream konum: ${position.latitude}, ${position.longitude}');
+        final now = DateTime.now();
+        if (_lastSent == null ||
+            now.difference(_lastSent!).inSeconds >= 30) {
+          _lastSent = now;
+          await _sendLocation(position);
+        }
+      },
+      onError: (error) {
+        print('❌ Stream hatası: $error');
+      },
+    );
   }
 
   static void stopBackendTracking() {
-    _timer?.cancel();
-    _timer = null;
+    _backendStream?.cancel();
+    _backendStream = null;
+    _courierId = null;
+    _lastSent = null;
+    print('⏹ Tracking durduruldu');
   }
 
-  static Future<void> _sendLocation() async {
-    print('📍 _sendLocation çağrıldı, courierId: $_courierId');
-    print('📍 Konum gönderiliyor...');
-
-    if (_courierId == null) {
-      print('❌ Courier ID yok!');
-      return;
-    }
-
+  static Future<void> _sendLocation(Position position) async {
     try {
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
-      print('📍 Pozisyon: ${position.latitude}, ${position.longitude}');
-
-      if (position.latitude == 0 && position.longitude == 0) {
-        print('❌ Koordinatlar 0,0 geçersiz!');
-        return;
-      }
-
       final token = await StorageService.getToken();
+      if (token == null || _courierId == null || _courierId!.isEmpty) return;
+
+      print('📍 Gönderiliyor: LAT=${position.latitude} LNG=${position.longitude}');
 
       final response = await http.patch(
         Uri.parse(
@@ -196,24 +191,14 @@ class LocationService {
           'Content-Type': 'application/json',
         },
         body: json.encode({
-          'latitude': position.latitude.toDouble(),
-          'longitude': position.longitude.toDouble(),
+          'latitude': position.latitude,
+          'longitude': position.longitude,
         }),
       );
 
-      print('📍 Response: ${response.statusCode} - ${response.body}');
+      print('📍 Response: ${response.statusCode}');
     } catch (e) {
-      print('❌ Konum gönderilemedi: $e');
-    }
-  }
-
-  // ----- Cleanup -----
-
-  void dispose() {
-    _positionStream?.cancel();
-    _positionStream = null;
-    if (!_positionController.isClosed) {
-      _positionController.close();
+      print('❌ Hata: $e');
     }
   }
 }
