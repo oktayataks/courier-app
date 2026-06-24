@@ -1,116 +1,225 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
+import '../config/constants.dart';
 import '../config/routes.dart';
 import '../config/theme.dart';
 import '../providers/auth_provider.dart';
+import '../services/storage_service.dart';
 import '../widgets/logo_background.dart';
 
-class ProfileScreen extends ConsumerWidget {
+class ProfileScreen extends ConsumerStatefulWidget {
   const ProfileScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends ConsumerState<ProfileScreen> {
+  Map<String, dynamic>? _courierData;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCourierData();
+  }
+
+  Future<void> _loadCourierData() async {
+    try {
+      final token = await StorageService.getToken();
+      final response = await http.get(
+        Uri.parse('${AppConstants.apiBaseUrl}/couriers/me'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (response.statusCode == 200) {
+        setState(() {
+          _courierData = json.decode(response.body) as Map<String, dynamic>;
+          _isLoading = false;
+        });
+      } else {
+        setState(() => _isLoading = false);
+      }
+    } catch (e) {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final user = ref.watch(authProvider).user;
+
+    final courierUser =
+        _courierData?['user'] as Map<String, dynamic>? ?? {};
+    final fullName = courierUser['fullName'] as String? ??
+        _courierData?['fullName'] as String? ??
+        user?.name ??
+        '-';
+    final email = courierUser['email'] as String? ??
+        _courierData?['email'] as String? ??
+        user?.email ??
+        '-';
+    final phone = courierUser['phone'] as String? ??
+        _courierData?['phone'] as String? ??
+        user?.phone ??
+        '-';
+    final vehicleType =
+        _courierData?['vehicleType'] as String? ?? '-';
+    final rating = _courierData?['rating']?.toString() ?? '0.00';
+    final totalDeliveries =
+        _courierData?['totalDeliveries']?.toString() ?? '-';
+    final isOnline = _courierData?['isOnline'] as bool? ?? false;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Profilim'),
         automaticallyImplyLeading: false,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh_rounded),
+            onPressed: () {
+              setState(() => _isLoading = true);
+              _loadCourierData();
+            },
+          ),
+        ],
       ),
       body: LogoBackground(
         child: SafeArea(
-        child: ListView(
-          children: [
-            const SizedBox(height: 16),
-            _buildProfileHeader(user?.name ?? 'Kurye', user?.phone ?? ''),
-            const SizedBox(height: 24),
-            _buildStatsRow(),
-            const SizedBox(height: 16),
-            _buildMenuSection(
-              title: 'Hesap',
-              items: [
-                _MenuItem(
-                  icon: Icons.person_outline_rounded,
-                  label: 'Kişisel Bilgiler',
-                  onTap: () {},
+          child: _isLoading
+              ? const Center(
+                  child: CircularProgressIndicator(
+                    color: AppTheme.primaryLight,
+                  ),
+                )
+              : ListView(
+                  children: [
+                    const SizedBox(height: 16),
+                    _buildProfileHeader(fullName, phone, isOnline),
+                    const SizedBox(height: 16),
+                    _buildStatsRow(totalDeliveries, rating),
+                    const SizedBox(height: 8),
+                    _buildMenuSection(
+                      title: 'Kişisel Bilgiler',
+                      items: [
+                        _MenuItem(
+                          icon: Icons.person_outline_rounded,
+                          label: 'Ad Soyad',
+                          trailing: fullName,
+                          onTap: () {},
+                        ),
+                        _MenuItem(
+                          icon: Icons.email_outlined,
+                          label: 'E-posta',
+                          trailing: email,
+                          onTap: () {},
+                        ),
+                        _MenuItem(
+                          icon: Icons.phone_outlined,
+                          label: 'Telefon',
+                          trailing: phone,
+                          onTap: () {},
+                        ),
+                      ],
+                    ),
+                    _buildMenuSection(
+                      title: 'Araç Bilgileri',
+                      items: [
+                        _MenuItem(
+                          icon: Icons.directions_bike_rounded,
+                          label: 'Araç Tipi',
+                          trailing: _vehicleLabel(vehicleType),
+                          onTap: () {},
+                        ),
+                        _MenuItem(
+                          icon: Icons.star_outline_rounded,
+                          label: 'Puan',
+                          trailing: '$rating ⭐',
+                          onTap: () {},
+                        ),
+                        _MenuItem(
+                          icon: isOnline
+                              ? Icons.check_circle_outline
+                              : Icons.cancel_outlined,
+                          label: 'Durum',
+                          trailing: isOnline ? 'Çevrimiçi' : 'Çevrimdışı',
+                          onTap: () {},
+                        ),
+                      ],
+                    ),
+                    _buildMenuSection(
+                      title: 'Uygulama',
+                      items: [
+                        _MenuItem(
+                          icon: Icons.notifications_outlined,
+                          label: 'Bildirimler',
+                          onTap: () {},
+                        ),
+                        _MenuItem(
+                          icon: Icons.language_rounded,
+                          label: 'Dil',
+                          trailing: 'Türkçe',
+                          onTap: () {},
+                        ),
+                      ],
+                    ),
+                    _buildMenuSection(
+                      title: 'Destek',
+                      items: [
+                        _MenuItem(
+                          icon: Icons.help_outline_rounded,
+                          label: 'Yardım Merkezi',
+                          onTap: () {},
+                        ),
+                        _MenuItem(
+                          icon: Icons.info_outline_rounded,
+                          label: 'Hakkında',
+                          trailing: 'v1.0.0',
+                          onTap: () {},
+                        ),
+                        _MenuItem(
+                          icon: Icons.privacy_tip_outlined,
+                          label: 'Gizlilik Politikası',
+                          onTap: () {},
+                        ),
+                      ],
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: OutlinedButton.icon(
+                        onPressed: () => _handleLogout(context, ref),
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(52),
+                          side: const BorderSide(color: AppColors.error),
+                          foregroundColor: AppColors.error,
+                        ),
+                        icon: const Icon(Icons.logout_rounded),
+                        label: const Text(
+                          'Çıkış Yap',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                  ],
                 ),
-                _MenuItem(
-                  icon: Icons.directions_bike_rounded,
-                  label: 'Araç Bilgileri',
-                  onTap: () {},
-                ),
-                _MenuItem(
-                  icon: Icons.account_balance_rounded,
-                  label: 'Ödeme Bilgileri',
-                  onTap: () {},
-                ),
-              ],
-            ),
-            _buildMenuSection(
-              title: 'Uygulama',
-              items: [
-                _MenuItem(
-                  icon: Icons.notifications_outlined,
-                  label: 'Bildirimler',
-                  onTap: () {},
-                ),
-                _MenuItem(
-                  icon: Icons.language_rounded,
-                  label: 'Dil',
-                  trailing: 'Türkçe',
-                  onTap: () {},
-                ),
-                _MenuItem(
-                  icon: Icons.dark_mode_outlined,
-                  label: 'Tema',
-                  trailing: 'Açık',
-                  onTap: () {},
-                ),
-              ],
-            ),
-            _buildMenuSection(
-              title: 'Destek',
-              items: [
-                _MenuItem(
-                  icon: Icons.help_outline_rounded,
-                  label: 'Yardım Merkezi',
-                  onTap: () {},
-                ),
-                _MenuItem(
-                  icon: Icons.info_outline_rounded,
-                  label: 'Hakkında',
-                  trailing: 'v1.0.0',
-                  onTap: () {},
-                ),
-                _MenuItem(
-                  icon: Icons.privacy_tip_outlined,
-                  label: 'Gizlilik Politikası',
-                  onTap: () {},
-                ),
-              ],
-            ),
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: OutlinedButton.icon(
-                onPressed: () => _handleLogout(context, ref),
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(52),
-                  side: const BorderSide(color: AppColors.error),
-                  foregroundColor: AppColors.error,
-                ),
-                icon: const Icon(Icons.logout_rounded),
-                label: const Text(
-                  'Çıkış Yap',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-              ),
-            ),
-            const SizedBox(height: 24),
-          ],
-        ),
         ),
       ),
     );
+  }
+
+  String _vehicleLabel(String type) {
+    switch (type) {
+      case 'motorbike':
+        return 'Motorsiklet';
+      case 'bike':
+        return 'Bisiklet';
+      case 'car':
+        return 'Araba';
+      default:
+        return type;
+    }
   }
 
   Future<void> _handleLogout(BuildContext context, WidgetRef ref) async {
@@ -149,7 +258,8 @@ class ProfileScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildProfileHeader(String name, String phone) {
+  Widget _buildProfileHeader(
+      String name, String phone, bool isOnline) {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
       padding: const EdgeInsets.all(20),
@@ -179,7 +289,8 @@ class ProfileScreen extends ConsumerWidget {
               backgroundColor: AppColors.surface,
               child: CircleAvatar(
                 radius: 30,
-                backgroundColor: AppColors.primary.withValues(alpha: 0.15),
+                backgroundColor:
+                    AppColors.primary.withValues(alpha: 0.15),
                 child: Text(
                   name.isNotEmpty ? name[0].toUpperCase() : 'K',
                   style: const TextStyle(
@@ -219,24 +330,31 @@ class ProfileScreen extends ConsumerWidget {
                     vertical: 3,
                   ),
                   decoration: BoxDecoration(
-                    color: AppColors.success.withValues(alpha: 0.15),
+                    color: (isOnline ? AppColors.success : AppColors.error)
+                        .withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(6),
                   ),
-                  child: const Row(
+                  child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(
-                        Icons.verified_rounded,
+                        isOnline
+                            ? Icons.verified_rounded
+                            : Icons.cancel_outlined,
                         size: 12,
-                        color: AppColors.success,
+                        color: isOnline
+                            ? AppColors.success
+                            : AppColors.error,
                       ),
-                      SizedBox(width: 4),
+                      const SizedBox(width: 4),
                       Text(
-                        'Onaylı Kurye',
+                        isOnline ? 'Çevrimiçi' : 'Çevrimdışı',
                         style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.w600,
-                          color: AppColors.success,
+                          color: isOnline
+                              ? AppColors.success
+                              : AppColors.error,
                         ),
                       ),
                     ],
@@ -250,7 +368,7 @@ class ProfileScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildStatsRow() {
+  Widget _buildStatsRow(String deliveries, String rating) {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
       padding: const EdgeInsets.symmetric(vertical: 16),
@@ -260,11 +378,11 @@ class ProfileScreen extends ConsumerWidget {
       ),
       child: Row(
         children: [
-          _buildStatCol('Teslimat', '124'),
+          _buildStatCol('Teslimat', deliveries),
           _buildDivider(),
-          _buildStatCol('Puan', '4.8'),
+          _buildStatCol('Puan', rating),
           _buildDivider(),
-          _buildStatCol('Süre', '6 ay'),
+          _buildStatCol('Durum', 'Aktif'),
         ],
       ),
     );
@@ -308,7 +426,7 @@ class ProfileScreen extends ConsumerWidget {
     required List<_MenuItem> items,
   }) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 24, 16, 8),
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -338,7 +456,8 @@ class ProfileScreen extends ConsumerWidget {
                       leading: Container(
                         padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
-                          color: AppColors.primary.withValues(alpha: 0.1),
+                          color:
+                              AppColors.primary.withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Icon(
@@ -358,11 +477,14 @@ class ProfileScreen extends ConsumerWidget {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           if (e.value.trailing != null)
-                            Text(
-                              e.value.trailing!,
-                              style: const TextStyle(
-                                fontSize: 13,
-                                color: AppColors.textSecondary,
+                            Flexible(
+                              child: Text(
+                                e.value.trailing!,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  color: AppColors.textSecondary,
+                                ),
                               ),
                             ),
                           const SizedBox(width: 4),
