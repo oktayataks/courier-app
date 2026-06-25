@@ -88,6 +88,7 @@ class _OrderHistoryScreenState extends ConsumerState<OrderHistoryScreen> {
                   59,
                 );
                 final filtered = orders.where((o) {
+                  if (o.status != 'delivered') return false;
                   final t = o.deliveredAt ?? o.createdAt;
                   return !t.isBefore(start) && !t.isAfter(end);
                 }).toList();

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -22,6 +23,7 @@ class OrderDetailScreen extends ConsumerStatefulWidget {
 
 class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
   String? _selectedStatus;
+  bool _isUpdating = false;
 
   List<String> _getAvailableStatuses(String currentStatus) {
     final status = currentStatus.toLowerCase();
@@ -43,6 +45,155 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
         return '📦 Atandı';
       default:
         return status;
+    }
+  }
+
+  Future<void> _acceptOrder(Order order) async {
+    if (_isUpdating) return;
+    setState(() => _isUpdating = true);
+
+    try {
+      final token = await StorageService.getToken();
+      final response = await http.post(
+        Uri.parse('${AppConstants.apiBaseUrl}/orders/${order.id}/accept'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (!mounted) return;
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        await ref.read(ordersProvider.notifier).loadOrders();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('✅ Sipariş kabul edildi!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+        Navigator.pop(context);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('❌ Sipariş alınamadı!'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isUpdating = false);
+    }
+  }
+
+  Future<void> _updateStatus(Order order, String newStatus) async {
+    if (_isUpdating) return;
+
+    // Teslim işleminde mesafe kontrolü
+    if (newStatus == 'delivered') {
+      setState(() => _isUpdating = true);
+      final canDeliver = await _checkDeliveryDistance(order);
+      if (!canDeliver) {
+        if (mounted) setState(() => _isUpdating = false);
+        return;
+      }
+    } else {
+      setState(() => _isUpdating = true);
+    }
+
+    try {
+      final ok = await ref
+          .read(ordersProvider.notifier)
+          .updateOrderStatus(order.id, newStatus);
+
+      if (!mounted) return;
+      if (ok) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${_getStatusLabel(newStatus)} olarak güncellendi!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+        Navigator.pop(context);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Durum güncellenemedi'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isUpdating = false);
+    }
+  }
+
+  Future<bool> _checkDeliveryDistance(Order order) async {
+    try {
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 10),
+      );
+
+      final orderLat = order.deliveryLatitude;
+      final orderLng = order.deliveryLongitude;
+
+      // Koordinat 0,0 ise konum bilgisi yok → izin ver
+      if (orderLat == 0 && orderLng == 0) return true;
+
+      final distance = Geolocator.distanceBetween(
+        position.latitude,
+        position.longitude,
+        orderLat,
+        orderLng,
+      );
+
+      print('📍 Müşteriye mesafe: ${distance.toStringAsFixed(0)}m');
+
+      if (distance > 150) {
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              icon: const Icon(
+                Icons.location_off,
+                color: Colors.orange,
+                size: 48,
+              ),
+              title: const Text('Adrese Yaklaşın'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Teslim adresine ${distance.toStringAsFixed(0)} metre uzaktasınız.',
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Lütfen müşteriye 150 metreden daha yakın bir mesafeye gelin.',
+                    style: TextStyle(color: Colors.grey, fontSize: 13),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Tamam'),
+                ),
+              ],
+            ),
+          );
+        }
+        return false;
+      }
+
+      return true;
+    } catch (e) {
+      print('❌ Mesafe kontrolü hatası: $e');
+      // Hata durumunda izin ver (kuryeyi mağdur etme)
+      return true;
     }
   }
 
@@ -309,47 +460,20 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
       return SizedBox(
         width: double.infinity,
         child: ElevatedButton.icon(
-          onPressed: () async {
-            final token = await StorageService.getToken();
-
-            final response = await http.post(
-              Uri.parse(
-                '${AppConstants.apiBaseUrl}/orders/${order.id}/accept',
-              ),
-              headers: {
-                'Authorization': 'Bearer $token',
-                'Content-Type': 'application/json',
-              },
-            );
-
-            if (response.statusCode == 200 ||
-                response.statusCode == 201) {
-              await ref.read(ordersProvider.notifier).loadOrders();
-
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('✅ Sipariş kabul edildi!'),
-                    backgroundColor: Colors.green,
+          onPressed: _isUpdating ? null : () => _acceptOrder(order),
+          icon: _isUpdating
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
                   ),
-                );
-                Navigator.pop(context);
-              }
-            } else {
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('❌ Sipariş alınamadı!'),
-                    backgroundColor: Colors.red,
-                  ),
-                );
-              }
-            }
-          },
-          icon: const Icon(Icons.check_circle),
-          label: const Text(
-            'Siparişi Kabul Et',
-            style: TextStyle(fontSize: 16),
+                )
+              : const Icon(Icons.check_circle),
+          label: Text(
+            _isUpdating ? 'İşleniyor...' : 'Siparişi Kabul Et',
+            style: const TextStyle(fontSize: 16),
           ),
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.green,
@@ -395,11 +519,13 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
                   child: Text(_getStatusLabel(status)),
                 );
               }).toList(),
-              onChanged: (value) {
-                setState(() {
-                  _selectedStatus = value;
-                });
-              },
+              onChanged: _isUpdating
+                  ? null
+                  : (value) {
+                      setState(() {
+                        _selectedStatus = value;
+                      });
+                    },
             ),
           ),
         ),
@@ -407,39 +533,26 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
         SizedBox(
           width: double.infinity,
           child: ElevatedButton.icon(
-            onPressed: _selectedStatus == null
+            onPressed: (_selectedStatus == null || _isUpdating)
                 ? null
-                : () async {
-                    if (_selectedStatus == null) return;
-
-                    final ok = await ref
-                        .read(ordersProvider.notifier)
-                        .updateOrderStatus(order.id, _selectedStatus!);
-
-                    if (!context.mounted) return;
-                    if (ok) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            '${_getStatusLabel(_selectedStatus!)} olarak güncellendi!',
-                          ),
-                          backgroundColor: Colors.green,
-                        ),
-                      );
-                      Navigator.pop(context);
-                    } else {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Durum güncellenemedi'),
-                          backgroundColor: Colors.red,
-                        ),
-                      );
-                    }
-                  },
-            icon: const Icon(Icons.update),
-            label: const Text(
-              'Durumu Güncelle',
-              style: TextStyle(fontSize: 16),
+                : () => _updateStatus(order, _selectedStatus!),
+            icon: _isUpdating
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(Icons.update),
+            label: Text(
+              _isUpdating
+                  ? (_selectedStatus == 'delivered'
+                      ? 'Konum kontrol ediliyor...'
+                      : 'İşleniyor...')
+                  : 'Durumu Güncelle',
+              style: const TextStyle(fontSize: 16),
             ),
             style: ElevatedButton.styleFrom(
               backgroundColor: AppTheme.primaryLight,

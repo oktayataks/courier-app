@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import '../models/order.dart';
+import '../screens/delivery_report_screen.dart';
 import '../screens/document_screen.dart';
 import '../screens/earnings_report_screen.dart';
 import '../screens/earnings_screen.dart';
 import '../screens/home_screen.dart';
 import '../screens/login_screen.dart';
+import '../screens/my_location_screen.dart';
 import '../screens/navigation_screen.dart';
 import '../screens/order_detail_screen.dart';
 import '../screens/order_history_screen.dart';
@@ -25,9 +27,12 @@ class AppRoutes {
   static const String profile = '/profile';
 
   // Drawer sayfaları
+  static const String myLocation = '/my-location';
   static const String orderPool = '/order-pool';
   static const String orderHistory = '/order-history';
   static const String earningsReport = '/earnings-report';
+  static const String deliveryReport = '/delivery-report';
+  static const String invoices = '/invoices';
   static const String shifts = '/shifts';
   static const String userAgreement = '/user-agreement';
   static const String privacyPolicy = '/privacy-policy';
@@ -54,12 +59,18 @@ class AppRoutes {
         return _buildRoute(const ProfileScreen(), settings);
 
       // Drawer sayfaları
+      case myLocation:
+        return _buildRoute(const MyLocationScreen(), settings);
       case orderPool:
         return _buildRoute(const OrderPoolScreen(), settings);
       case orderHistory:
         return _buildRoute(const OrderHistoryScreen(), settings);
       case earningsReport:
         return _buildRoute(const EarningsReportScreen(), settings);
+      case deliveryReport:
+        return _buildRoute(const DeliveryReportScreen(), settings);
+      case invoices:
+        return _buildRoute(const InvoicesScreen(), settings);
       case shifts:
         return _buildRoute(const ShiftsScreen(), settings);
       case userAgreement:

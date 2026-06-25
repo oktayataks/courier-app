@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../config/theme.dart';
 import '../models/order.dart';
@@ -12,13 +13,12 @@ class NavigationScreen extends ConsumerStatefulWidget {
   const NavigationScreen({super.key, required this.order});
 
   @override
-  ConsumerState<NavigationScreen> createState() => _NavigationScreenState();
+  ConsumerState<NavigationScreen> createState() =>
+      _NavigationScreenState();
 }
 
 class _NavigationScreenState extends ConsumerState<NavigationScreen> {
-  GoogleMapController? _mapController;
-  final Set<Marker> _markers = {};
-  final Set<Polyline> _polylines = {};
+  final MapController _mapController = MapController();
   bool _initialFitDone = false;
 
   @override
@@ -26,98 +26,48 @@ class _NavigationScreenState extends ConsumerState<NavigationScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(locationProvider.notifier).getCurrentLocation();
-      _setupMarkers();
+      if (!_initialFitDone) {
+        _initialFitDone = true;
+        Future.delayed(const Duration(milliseconds: 500), _fitToBounds);
+      }
     });
   }
 
-  /// Alış + teslim noktalarını ekrana sığdıracak şekilde kamerayı çerçevele.
-  /// Map controller hazır değilse no-op.
-  Future<void> _fitToBounds() async {
-    final controller = _mapController;
+  @override
+  void dispose() {
+    _mapController.dispose();
+    super.dispose();
+  }
+
+  void _fitToBounds() {
     final order = widget.order;
-    if (controller == null || order == null) return;
+    if (order == null) return;
 
     final pickupLat = order.pickupAddress.latitude;
     final pickupLng = order.pickupAddress.longitude;
     final deliveryLat = order.deliveryAddress.latitude;
     final deliveryLng = order.deliveryAddress.longitude;
 
-    // Noktalar aynıysa veya geçersizse (0,0) tek noktaya zoom yap.
     if ((pickupLat == 0 && pickupLng == 0) ||
-        (deliveryLat == 0 && deliveryLng == 0)) {
-      return;
-    }
+        (deliveryLat == 0 && deliveryLng == 0)) return;
 
     final bounds = LatLngBounds(
-      southwest: LatLng(
+      LatLng(
         pickupLat < deliveryLat ? pickupLat : deliveryLat,
         pickupLng < deliveryLng ? pickupLng : deliveryLng,
       ),
-      northeast: LatLng(
+      LatLng(
         pickupLat > deliveryLat ? pickupLat : deliveryLat,
         pickupLng > deliveryLng ? pickupLng : deliveryLng,
       ),
     );
-    await controller.animateCamera(CameraUpdate.newLatLngBounds(bounds, 80));
-  }
 
-  void _setupMarkers() {
-    final order = widget.order;
-    if (order == null) return;
-
-    setState(() {
-      _markers.add(
-        Marker(
-          markerId: const MarkerId('pickup'),
-          position: LatLng(
-            order.pickupAddress.latitude,
-            order.pickupAddress.longitude,
-          ),
-          icon: BitmapDescriptor.defaultMarkerWithHue(
-            BitmapDescriptor.hueOrange,
-          ),
-          infoWindow: InfoWindow(
-            title: 'Alış Noktası',
-            snippet: order.pickupAddress.title ?? order.pickupAddress.fullAddress,
-          ),
-        ),
-      );
-
-      _markers.add(
-        Marker(
-          markerId: const MarkerId('delivery'),
-          position: LatLng(
-            order.deliveryAddress.latitude,
-            order.deliveryAddress.longitude,
-          ),
-          icon: BitmapDescriptor.defaultMarkerWithHue(
-            BitmapDescriptor.hueGreen,
-          ),
-          infoWindow: InfoWindow(
-            title: 'Teslim Noktası',
-            snippet: order.deliveryAddress.fullAddress,
-          ),
-        ),
-      );
-
-      _polylines.add(
-        Polyline(
-          polylineId: const PolylineId('route'),
-          color: AppColors.primary,
-          width: 4,
-          points: [
-            LatLng(
-              order.pickupAddress.latitude,
-              order.pickupAddress.longitude,
-            ),
-            LatLng(
-              order.deliveryAddress.latitude,
-              order.deliveryAddress.longitude,
-            ),
-          ],
-        ),
-      );
-    });
+    _mapController.fitCamera(
+      CameraFit.bounds(
+        bounds: bounds,
+        padding: const EdgeInsets.all(60),
+      ),
+    );
   }
 
   Future<void> _openExternalNavigation() async {
@@ -143,39 +93,110 @@ class _NavigationScreenState extends ConsumerState<NavigationScreen> {
       );
     }
 
-    final initialPosition = CameraPosition(
-      target: LatLng(
-        order.pickupAddress.latitude,
-        order.pickupAddress.longitude,
-      ),
-      zoom: 14,
+    final pickupLatLng = LatLng(
+      order.pickupAddress.latitude,
+      order.pickupAddress.longitude,
+    );
+    final deliveryLatLng = LatLng(
+      order.deliveryAddress.latitude,
+      order.deliveryAddress.longitude,
     );
 
+    final currentPos = locationState.currentPosition;
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Navigasyon')),
+      appBar: AppBar(
+        title: const Text('Navigasyon'),
+        flexibleSpace: Container(
+          decoration:
+              const BoxDecoration(gradient: AppTheme.headerGradient),
+        ),
+      ),
       body: Stack(
         children: [
-          GoogleMap(
-            initialCameraPosition: initialPosition,
-            markers: _markers,
-            polylines: _polylines,
-            myLocationEnabled: locationState.hasPermission,
-            myLocationButtonEnabled: false,
-            zoomControlsEnabled: false,
-            onMapCreated: (controller) {
-              _mapController = controller;
-              if (!_initialFitDone) {
-                _initialFitDone = true;
-                Future.delayed(const Duration(milliseconds: 300), _fitToBounds);
-              }
-            },
+          FlutterMap(
+            mapController: _mapController,
+            options: MapOptions(
+              initialCenter: pickupLatLng,
+              initialZoom: 14,
+            ),
+            children: [
+              TileLayer(
+                urlTemplate:
+                    'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                userAgentPackageName: 'com.example.courier_app',
+                maxZoom: 19,
+              ),
+              // Rota çizgisi
+              PolylineLayer(
+                polylines: [
+                  Polyline(
+                    points: [pickupLatLng, deliveryLatLng],
+                    color: AppColors.primary,
+                    strokeWidth: 4,
+                  ),
+                ],
+              ),
+              // Marker'lar
+              MarkerLayer(
+                markers: [
+                  // Alış noktası (turuncu)
+                  Marker(
+                    point: pickupLatLng,
+                    width: 44,
+                    height: 44,
+                    child: const Icon(
+                      Icons.store_rounded,
+                      color: AppColors.accent,
+                      size: 36,
+                    ),
+                  ),
+                  // Teslim noktası (yeşil)
+                  Marker(
+                    point: deliveryLatLng,
+                    width: 44,
+                    height: 44,
+                    child: const Icon(
+                      Icons.location_pin,
+                      color: AppColors.success,
+                      size: 40,
+                    ),
+                  ),
+                  // Mevcut konum (mavi)
+                  if (currentPos != null)
+                    Marker(
+                      point: LatLng(
+                          currentPos.latitude, currentPos.longitude),
+                      width: 32,
+                      height: 32,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: AppColors.primary,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                              color: Colors.white, width: 2),
+                        ),
+                        child: const Icon(
+                          Icons.navigation_rounded,
+                          color: Colors.white,
+                          size: 18,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ],
           ),
+
+          // Sipariş bilgisi (üst)
           Positioned(
             top: 16,
             left: 16,
             right: 16,
             child: _buildOrderInfo(order),
           ),
+
+          // Harita kontrolleri (sağ)
           Positioned(
             right: 16,
             bottom: 100,
@@ -184,40 +205,30 @@ class _NavigationScreenState extends ConsumerState<NavigationScreen> {
                 _buildMapButton(
                   icon: Icons.my_location_rounded,
                   onTap: () async {
-                    final messenger = ScaffoldMessenger.of(context);
-                    final notifier = ref.read(locationProvider.notifier);
+                    final notifier =
+                        ref.read(locationProvider.notifier);
                     await notifier.getCurrentLocation();
                     if (!mounted) return;
-
-                    final pos = ref.read(locationProvider).currentPosition;
-                    if (pos != null && _mapController != null) {
-                      await _mapController!.animateCamera(
-                        CameraUpdate.newLatLngZoom(
-                          LatLng(pos.latitude, pos.longitude),
-                          16,
-                        ),
+                    final pos =
+                        ref.read(locationProvider).currentPosition;
+                    if (pos != null) {
+                      _mapController.move(
+                        LatLng(pos.latitude, pos.longitude),
+                        16,
                       );
-                      return;
                     }
-
-                    messenger.showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                          'Konum alınamadı. Ayarlardan konum izni verin.',
-                        ),
-                        behavior: SnackBarBehavior.floating,
-                      ),
-                    );
                   },
                 ),
                 const SizedBox(height: 12),
                 _buildMapButton(
                   icon: Icons.zoom_out_map_rounded,
-                  onTap: () => _fitToBounds(),
+                  onTap: _fitToBounds,
                 ),
               ],
             ),
           ),
+
+          // Navigasyon butonu (alt)
           Positioned(
             left: 16,
             right: 16,
@@ -271,17 +282,13 @@ class _NavigationScreenState extends ConsumerState<NavigationScreen> {
                 Text(
                   order.orderNumber,
                   style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14,
-                  ),
+                      fontWeight: FontWeight.w700, fontSize: 14),
                 ),
                 const SizedBox(height: 2),
                 Text(
                   '${order.distanceKm.toStringAsFixed(1)} km • ${order.estimatedMinutes} dk',
                   style: const TextStyle(
-                    fontSize: 12,
-                    color: AppColors.textSecondary,
-                  ),
+                      fontSize: 12, color: AppColors.textSecondary),
                 ),
               ],
             ),

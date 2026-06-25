@@ -38,6 +38,46 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
     return Scaffold(
       drawer: _buildDrawer(context),
+      bottomNavigationBar: BottomNavigationBar(
+        type: BottomNavigationBarType.fixed,
+        currentIndex: 0,
+        selectedItemColor: AppTheme.primaryLight,
+        unselectedItemColor: AppTheme.textSecondary,
+        onTap: (index) {
+          switch (index) {
+            case 1:
+              Navigator.of(context).pushNamed(AppRoutes.myLocation);
+            case 2:
+              Navigator.of(context).pushNamed(AppRoutes.earnings);
+            case 3:
+              Navigator.of(context).pushNamed(AppRoutes.orderHistory);
+            case 4:
+              Navigator.of(context).pushNamed(AppRoutes.profile);
+          }
+        },
+        items: const [
+          BottomNavigationBarItem(
+            icon: Icon(Icons.home_rounded),
+            label: 'Ana Sayfa',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.my_location_rounded),
+            label: 'Konumum',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.payments_outlined),
+            label: 'Kazançlar',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.history_rounded),
+            label: 'Geçmiş',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.person_rounded),
+            label: 'Profil',
+          ),
+        ],
+      ),
       body: LogoBackground(
         child: Column(
           children: [
@@ -140,6 +180,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               ),
             ),
           ),
+          _buildOnlineToggleCard(context, courier, isOnline),
           _buildActiveOrderBanner(context),
           Expanded(
             child: ordersAsync.when(
@@ -246,6 +287,72 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
         ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildOnlineToggleCard(
+      BuildContext context, courier, bool isOnline) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: isOnline ? Colors.green.shade50 : Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isOnline ? Colors.green : Colors.grey.shade400,
+          width: 1.5,
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isOnline ? Icons.check_circle : Icons.pause_circle,
+            color: isOnline ? Colors.green : Colors.grey,
+            size: 30,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isOnline ? 'Çevrimiçi' : 'Çevrimdışı',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15,
+                    color: isOnline ? Colors.green : Colors.grey.shade700,
+                  ),
+                ),
+                Text(
+                  isOnline ? 'Sipariş alabilirsin' : 'Sipariş alamazsın',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                ),
+              ],
+            ),
+          ),
+          Switch(
+            value: isOnline,
+            onChanged: courier == null
+                ? null
+                : (value) async {
+                    await ref
+                        .read(courierProvider.notifier)
+                        .toggleOnlineStatus();
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          value ? 'Çevrimiçi oldunuz' : 'Çevrimdışı oldunuz',
+                        ),
+                        duration: const Duration(seconds: 2),
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
+                  },
+            activeColor: Colors.green,
+          ),
+        ],
       ),
     );
   }
@@ -371,6 +478,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             onTap: () => Navigator.pop(context),
           ),
           _buildDrawerItem(
+            icon: Icons.my_location_rounded,
+            title: 'Konumum',
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.of(context).pushNamed(AppRoutes.myLocation);
+            },
+          ),
+          _buildDrawerItem(
             icon: Icons.inventory_2_outlined,
             title: 'Sipariş Havuzu',
             onTap: () {
@@ -405,12 +520,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           _buildDrawerItem(
             icon: Icons.receipt_long_outlined,
             title: 'Hesap Özeti Raporu',
-            onTap: () => Navigator.pop(context),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.of(context).pushNamed(AppRoutes.earningsReport);
+            },
           ),
           _buildDrawerItem(
-            icon: Icons.restaurant_outlined,
+            icon: Icons.local_shipping_outlined,
             title: 'Restoran Teslimat Raporu',
-            onTap: () => Navigator.pop(context),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.of(context).pushNamed(AppRoutes.deliveryReport);
+            },
           ),
           _buildDrawerItem(
             icon: Icons.calendar_today_outlined,
@@ -423,12 +544,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           _buildDrawerItem(
             icon: Icons.check_circle_outline,
             title: 'Vardiya Slot Seçimi',
-            onTap: () => Navigator.pop(context),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.of(context).pushNamed(AppRoutes.shifts);
+            },
           ),
           _buildDrawerItem(
             icon: Icons.receipt_outlined,
             title: 'Faturalarım',
-            onTap: () => Navigator.pop(context),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.of(context).pushNamed(AppRoutes.invoices);
+            },
           ),
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
