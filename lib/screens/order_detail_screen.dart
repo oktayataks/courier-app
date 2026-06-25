@@ -240,12 +240,22 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
                     icon: Icons.phone_rounded,
                     label: 'Telefon',
                     value: o.customer.phone,
-                    trailing: IconButton(
-                      icon: const Icon(
-                        Icons.call_rounded,
-                        color: AppColors.success,
+                    trailing: ElevatedButton.icon(
+                      onPressed: () => _callCustomer(o.customer.phone),
+                      icon: const Icon(Icons.call_rounded, size: 16),
+                      label: const Text('Ara'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        textStyle: const TextStyle(fontSize: 13),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                       ),
-                      onPressed: () => _launchUrl('tel:${o.customer.phone}'),
                     ),
                   ),
                 ],
@@ -303,6 +313,27 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
                       ],
                     ),
                   ],
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: () => _openInMaps(
+                        o.deliveryAddress.latitude,
+                        o.deliveryAddress.longitude,
+                        o.deliveryAddress.fullAddress,
+                      ),
+                      icon: const Icon(Icons.directions_rounded),
+                      label: const Text('Yol Tarifi Al'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                  ),
                   if (o.notes != null) ...[
                     const SizedBox(height: 12),
                     Container(
@@ -702,6 +733,63 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
         ),
       ],
     );
+  }
+
+  Future<void> _callCustomer(String? phone) async {
+    if (phone == null || phone.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Müşteri telefonu yok')),
+      );
+      return;
+    }
+    final cleaned = phone.replaceAll(RegExp(r'[^0-9+]'), '');
+    final uri = Uri.parse('tel:$cleaned');
+    try {
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri);
+      } else {
+        throw 'Açılamadı';
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Arama açılamadı: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _openInMaps(double? lat, double? lng, String address) async {
+    Uri uri;
+    if (lat != null && lng != null && lat != 0 && lng != 0) {
+      uri = Uri.parse(
+        'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=driving',
+      );
+    } else if (address.isNotEmpty) {
+      uri = Uri.parse(
+        'https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(address)}',
+      );
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Adres bilgisi yok')),
+        );
+      }
+      return;
+    }
+    try {
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } else {
+        throw 'Açılamadı';
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Harita açılamadı: $e')),
+        );
+      }
+    }
   }
 
   Future<void> _launchUrl(String url) async {
