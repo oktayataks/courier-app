@@ -27,9 +27,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
 
   List<String> _getAvailableStatuses(String currentStatus) {
     final status = currentStatus.toLowerCase();
-    if (status.contains('assigned')) {
-      return ['picked_up', 'delivered'];
-    } else if (status.contains('picked_up')) {
+    if (status.contains('assigned') || status.contains('picked_up')) {
       return ['delivered'];
     }
     return [];
@@ -54,22 +52,32 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
 
     try {
       final token = await StorageService.getToken();
-      final response = await http.post(
+      final headers = {
+        'Authorization': 'Bearer $token',
+        'Content-Type': 'application/json',
+      };
+
+      // 1. Siparişi kabul et (pending → assigned)
+      final acceptResponse = await http.post(
         Uri.parse('${AppConstants.apiBaseUrl}/orders/${order.id}/accept'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json',
-        },
+        headers: headers,
       );
 
       if (!mounted) return;
 
-      if (response.statusCode == 200 || response.statusCode == 201) {
+      if (acceptResponse.statusCode == 200 || acceptResponse.statusCode == 201) {
+        // 2. Otomatik olarak yola çıktı (assigned → picked_up)
+        await http.patch(
+          Uri.parse('${AppConstants.apiBaseUrl}/orders/${order.id}/status'),
+          headers: headers,
+          body: '{"status":"picked_up"}',
+        );
+
         await ref.read(ordersProvider.notifier).loadOrders();
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('✅ Sipariş kabul edildi!'),
+            content: Text('✅ Sipariş kabul edildi, yola çıktınız!'),
             backgroundColor: Colors.green,
           ),
         );
@@ -139,7 +147,6 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
       final orderLat = order.deliveryLatitude;
       final orderLng = order.deliveryLongitude;
 
-      // Koordinat 0,0 ise konum bilgisi yok → izin ver
       if (orderLat == 0 && orderLng == 0) return true;
 
       final distance = Geolocator.distanceBetween(
@@ -149,9 +156,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
         orderLng,
       );
 
-      print('📍 Müşteriye mesafe: ${distance.toStringAsFixed(0)}m');
-
-      if (distance > 150) {
+      if (distance > 50) {
         if (mounted) {
           showDialog(
             context: context,
@@ -161,21 +166,10 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
                 color: Colors.orange,
                 size: 48,
               ),
-              title: const Text('Adrese Yaklaşın'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    'Teslim adresine ${distance.toStringAsFixed(0)} metre uzaktasınız.',
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Lütfen müşteriye 150 metreden daha yakın bir mesafeye gelin.',
-                    style: TextStyle(color: Colors.grey, fontSize: 13),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
+              title: const Text('Teslimat Adresine Uzaksınız'),
+              content: const Text(
+                'Lütfen teslimat adresine yaklaşın ve tekrar deneyin.',
+                textAlign: TextAlign.center,
               ),
               actions: [
                 TextButton(
@@ -191,8 +185,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
 
       return true;
     } catch (e) {
-      print('❌ Mesafe kontrolü hatası: $e');
-      // Hata durumunda izin ver (kuryeyi mağdur etme)
+      print('Mesafe kontrolü hatası: $e');
       return true;
     }
   }
