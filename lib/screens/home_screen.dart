@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../config/constants.dart';
 import '../config/routes.dart';
 import '../config/theme.dart';
@@ -41,6 +42,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   // Kurye durumu
   HomeCourierStatus _courierStatus = HomeCourierStatus.online;
+
+  // Backend'deki gerçek courier ID (lazy-fetch)
+  String? _courierId;
 
   @override
   void initState() {
@@ -367,25 +371,64 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     );
   }
 
+  /// Courier ID'yi önce önbellekten, yoksa /couriers/me'den alır.
+  Future<String?> _fetchCourierId() async {
+    if (_courierId != null) return _courierId;
+    try {
+      final token = await StorageService.getToken();
+      if (token == null) return null;
+      final res = await http.get(
+        Uri.parse('${AppConstants.apiBaseUrl}/couriers/me'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body) as Map<String, dynamic>;
+        _courierId = data['id']?.toString();
+        debugPrint('🔍 Courier ID önbelleğe alındı: $_courierId');
+      }
+    } catch (e) {
+      debugPrint('⚠️ Courier ID alınamadı: $e');
+    }
+    return _courierId;
+  }
+
   Future<void> _updateOnlineStatus(HomeCourierStatus status) async {
     final isOnline = status == HomeCourierStatus.online;
-    final courier = ref.read(courierProvider);
 
-    // Mevcut durum farklıysa API çağrısı yap
-    if (courier != null && courier.isOnline != isOnline) {
-      await ref.read(courierProvider.notifier).toggleOnlineStatus();
+    // Courier ID al
+    final courierId = await _fetchCourierId();
+    if (courierId == null) {
+      debugPrint('⚠️ Courier ID bulunamadı, status güncellenemiyor');
+      return;
+    }
+
+    try {
+      final token = await StorageService.getToken();
+      final response = await http.patch(
+        Uri.parse('${AppConstants.apiBaseUrl}/couriers/$courierId/status'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+        body: json.encode({'isOnline': isOnline}),
+      );
+      debugPrint(
+          '📡 Status güncellendi: ${response.statusCode} - ${response.body}');
+    } catch (e) {
+      debugPrint('❌ Status update error: $e');
     }
 
     if (!mounted) return;
+
+    final message = isOnline
+        ? 'Çevrimiçi oldunuz'
+        : status == HomeCourierStatus.onBreak
+            ? 'Molaya geçtiniz'
+            : 'Çevrimdışı oldunuz';
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(
-          isOnline
-              ? 'Çevrimiçi oldunuz'
-              : status == HomeCourierStatus.onBreak
-                  ? 'Molaya geçtiniz'
-                  : 'Çevrimdışı oldunuz',
-        ),
+        content: Text(message),
         duration: const Duration(seconds: 2),
         behavior: SnackBarBehavior.floating,
       ),
@@ -710,18 +753,24 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       markers.add(
         Marker(
           point: LatLng(lat, lng),
-          width: 36,
-          height: 36,
-          child: Tooltip(
-            message: '#${order.orderNumber}',
+          width: 40,
+          height: 40,
+          child: GestureDetector(
+            onTap: () => _showMarkerInfo(
+              icon: '🏠',
+              title: order.customerName,
+              subtitle: order.deliveryAddress.fullAddress,
+              orderNumber: '#${order.orderNumber}',
+              phone: order.customerPhone,
+            ),
             child: Container(
               decoration: BoxDecoration(
                 color: Colors.blue.shade600,
                 shape: BoxShape.circle,
                 border: Border.all(color: Colors.white, width: 2),
-                boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
+                boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 6)],
               ),
-              child: const Icon(Icons.location_on, color: Colors.white, size: 18),
+              child: const Icon(Icons.location_on, color: Colors.white, size: 20),
             ),
           ),
         ),
@@ -733,19 +782,29 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       final rLat = _suggestedOrder!.restaurant?.latitude;
       final rLng = _suggestedOrder!.restaurant?.longitude;
       if (rLat != null && rLng != null && rLat != 0 && rLng != 0) {
+        final suggested = _suggestedOrder!;
         markers.add(
           Marker(
             point: LatLng(rLat, rLng),
-            width: 40,
-            height: 40,
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.orange,
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 3),
-                boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 6)],
+            width: 44,
+            height: 44,
+            child: GestureDetector(
+              onTap: () => _showMarkerInfo(
+                icon: '🍽️',
+                title: suggested.restaurant?.name ?? 'Restoran',
+                subtitle: suggested.restaurant?.address ?? '',
+                orderNumber: '#${suggested.orderNumber}',
+                phone: suggested.restaurant?.phone,
               ),
-              child: const Icon(Icons.store, color: Colors.white, size: 20),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.orange,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 3),
+                  boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 6)],
+                ),
+                child: const Icon(Icons.store, color: Colors.white, size: 22),
+              ),
             ),
           ),
         );
@@ -765,6 +824,118 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         ),
         MarkerLayer(markers: markers),
       ],
+    );
+  }
+
+  // ── Marker Bilgi Paneli ──────────────────────────────────────────────────────
+  void _showMarkerInfo({
+    required String icon,
+    required String title,
+    required String subtitle,
+    String? orderNumber,
+    String? phone,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Text(icon, style: const TextStyle(fontSize: 32)),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      if (orderNumber != null) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          orderNumber,
+                          style: TextStyle(
+                            color: Colors.grey.shade600,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            if (subtitle.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Icon(Icons.location_on, size: 16, color: Colors.grey.shade500),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.grey.shade700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            if (phone != null && phone.isNotEmpty) ...[
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () async {
+                    Navigator.pop(ctx);
+                    final uri = Uri.parse(
+                        'tel:${phone.replaceAll(RegExp(r'[^0-9+]'), '')}');
+                    if (await canLaunchUrl(uri)) {
+                      await launchUrl(uri);
+                    }
+                  },
+                  icon: const Icon(Icons.phone, size: 18),
+                  label: Text(phone),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 
@@ -1167,6 +1338,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 onTap: () {
                   Navigator.pop(context);
                   Navigator.of(context).pushNamed(AppRoutes.invoices);
+                },
+              ),
+
+              _drawerItem(
+                context,
+                icon: Icons.inventory_2_outlined,
+                color: Colors.purple,
+                title: 'Sipariş Havuzu',
+                subtitle: 'Tüm bekleyen siparişler',
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.of(context).pushNamed(AppRoutes.orderPool);
                 },
               ),
 
