@@ -18,6 +18,8 @@ import '../widgets/order_card.dart';
 import 'help_screen.dart';
 import 'order_detail_screen.dart';
 
+enum HomeCourierStatus { online, onBreak, offline }
+
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
@@ -33,6 +35,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   bool _isAccepting = false;
   final MapController _mapController = MapController();
 
+  // Çoklu sipariş gezme
+  int _currentOrderIndex = 0;
+  final PageController _pageController = PageController();
+
+  // Kurye durumu
+  HomeCourierStatus _courierStatus = HomeCourierStatus.online;
+
   @override
   void initState() {
     super.initState();
@@ -41,6 +50,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       ref.read(courierProvider.notifier).loadCourier();
       _refreshOrders();
     });
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
   }
 
   // ── Veri Yükleme ────────────────────────────────────────────────────────────
@@ -209,15 +224,168 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     }
   }
 
-  Future<void> _toggleOnline() async {
+  MaterialColor _getStatusColor() {
+    switch (_courierStatus) {
+      case HomeCourierStatus.online:
+        return Colors.green;
+      case HomeCourierStatus.onBreak:
+        return Colors.orange;
+      case HomeCourierStatus.offline:
+        return Colors.grey;
+    }
+  }
+
+  String _getStatusText() {
+    switch (_courierStatus) {
+      case HomeCourierStatus.online:
+        return 'Online';
+      case HomeCourierStatus.onBreak:
+        return 'Molada';
+      case HomeCourierStatus.offline:
+        return 'Offline';
+    }
+  }
+
+  void _showStatusMenu() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.shade300,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Durumunu Seç',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 16),
+            _buildStatusOption(
+              ctx,
+              HomeCourierStatus.online,
+              'Online',
+              'Yeni sipariş alabilirim',
+              Colors.green,
+              Icons.check_circle_outline,
+            ),
+            _buildStatusOption(
+              ctx,
+              HomeCourierStatus.onBreak,
+              'Molada',
+              'Geçici olarak duraklattım',
+              Colors.orange,
+              Icons.coffee_outlined,
+            ),
+            _buildStatusOption(
+              ctx,
+              HomeCourierStatus.offline,
+              'Offline',
+              'Çalışmıyorum',
+              Colors.grey,
+              Icons.pause_circle_outline,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatusOption(
+    BuildContext ctx,
+    HomeCourierStatus status,
+    String title,
+    String subtitle,
+    MaterialColor color,
+    IconData icon,
+  ) {
+    final isSelected = _courierStatus == status;
+    return InkWell(
+      onTap: () async {
+        Navigator.pop(ctx);
+        setState(() => _courierStatus = status);
+        await _updateOnlineStatus(status);
+      },
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        margin: const EdgeInsets.only(bottom: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? color.shade50 : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected ? color : Colors.grey.shade200,
+            width: isSelected ? 2 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: color.shade100,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(icon, color: color, size: 24),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15,
+                    ),
+                  ),
+                  Text(
+                    subtitle,
+                    style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+            if (isSelected)
+              Icon(Icons.check_circle, color: color),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _updateOnlineStatus(HomeCourierStatus status) async {
+    final isOnline = status == HomeCourierStatus.online;
     final courier = ref.read(courierProvider);
-    if (courier == null) return;
-    final wasOnline = courier.isOnline;
-    await ref.read(courierProvider.notifier).toggleOnlineStatus();
+
+    // Mevcut durum farklıysa API çağrısı yap
+    if (courier != null && courier.isOnline != isOnline) {
+      await ref.read(courierProvider.notifier).toggleOnlineStatus();
+    }
+
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(!wasOnline ? 'Çevrimiçi oldunuz' : 'Çevrimdışı oldunuz'),
+        content: Text(
+          isOnline
+              ? 'Çevrimiçi oldunuz'
+              : status == HomeCourierStatus.onBreak
+                  ? 'Molaya geçtiniz'
+                  : 'Çevrimdışı oldunuz',
+        ),
         duration: const Duration(seconds: 2),
         behavior: SnackBarBehavior.floating,
       ),
@@ -229,9 +397,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final user = ref.watch(userProvider);
-    final courier = ref.watch(courierProvider);
-    final ordersState = ref.watch(ordersProvider);
-    final isOnline = courier?.isOnline ?? false;
+    ref.watch(courierProvider); // reactive update
+    ref.watch(ordersProvider);
     final activeOrder = _activeOrders.isNotEmpty ? _activeOrders.first : null;
     final displayOrder = activeOrder ?? _suggestedOrder;
 
@@ -266,20 +433,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ],
         ),
         actions: [
-          // Online/Offline pill toggle
+          // Durum pill butonu (Online / Molada / Offline)
           Padding(
-            padding: const EdgeInsets.only(right: 12),
+            padding: const EdgeInsets.only(right: 4),
             child: GestureDetector(
-              onTap: _toggleOnline,
+              onTap: _showStatusMenu,
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 250),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 decoration: BoxDecoration(
-                  color: isOnline ? Colors.green.shade50 : Colors.grey.shade200,
+                  color: _getStatusColor().shade50,
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: isOnline ? Colors.green : Colors.grey.shade400,
-                  ),
+                  border: Border.all(color: _getStatusColor()),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -289,26 +454,64 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       width: 8,
                       height: 8,
                       decoration: BoxDecoration(
-                        color: isOnline ? Colors.green : Colors.grey,
+                        color: _getStatusColor(),
                         shape: BoxShape.circle,
                       ),
                     ),
-                    const SizedBox(width: 6),
+                    const SizedBox(width: 5),
                     Text(
-                      isOnline ? 'Online' : 'Offline',
+                      _getStatusText(),
                       style: TextStyle(
-                        color: isOnline
-                            ? Colors.green.shade800
-                            : Colors.grey.shade700,
-                        fontSize: 13,
+                        color: _getStatusColor().shade800,
+                        fontSize: 12,
                         fontWeight: FontWeight.bold,
                       ),
+                    ),
+                    Icon(
+                      Icons.arrow_drop_down,
+                      size: 16,
+                      color: _getStatusColor().shade800,
                     ),
                   ],
                 ),
               ),
             ),
           ),
+          // 3 nokta menü
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert, color: Colors.black54),
+            onSelected: (value) {
+              switch (value) {
+                case 'profile':
+                  Navigator.of(context).pushNamed(AppRoutes.profile);
+                case 'history':
+                  Navigator.of(context).pushNamed(AppRoutes.orderHistory);
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'profile',
+                child: Row(
+                  children: [
+                    Icon(Icons.person_outline_rounded, color: Colors.indigo),
+                    SizedBox(width: 12),
+                    Text('Profil'),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'history',
+                child: Row(
+                  children: [
+                    Icon(Icons.history_rounded, color: Colors.purple),
+                    SizedBox(width: 12),
+                    Text('Geçmiş Siparişler'),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(width: 4),
         ],
       ),
 
@@ -565,131 +768,117 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     );
   }
 
-  // ── Alt Sipariş Kartı ────────────────────────────────────────────────────────
-  Widget _buildBottomOrderCard(Order order, bool isActive) {
-    final displayName = isActive
-        ? order.customerName
-        : (order.restaurant?.name ?? order.pickupAddress.title ?? 'Restoran');
-    final displayAddress = isActive
-        ? order.deliveryAddress.fullAddress
-        : (order.restaurant?.address ?? order.pickupAddress.fullAddress);
+  // ── Alt Sipariş Kartı (PageView destekli) ────────────────────────────────────
+  Widget _buildBottomOrderCard(Order _, bool __) {
+    // Aktif siparişler varsa PageView ile swipe
+    if (_activeOrders.isNotEmpty) {
+      return Container(
+        margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.15),
+              blurRadius: 16,
+              offset: const Offset(0, -4),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Tutamak
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            SizedBox(
+              height: 80,
+              child: PageView.builder(
+                controller: _pageController,
+                itemCount: _activeOrders.length,
+                onPageChanged: (i) {
+                  setState(() => _currentOrderIndex = i);
+                  final order = _activeOrders[i];
+                  final lat = order.deliveryLatitude;
+                  final lng = order.deliveryLongitude;
+                  if (lat != 0 && lng != 0) {
+                    _mapController.move(LatLng(lat, lng), 15);
+                  }
+                },
+                itemBuilder: (context, index) {
+                  final order = _activeOrders[index];
+                  return _buildOrderRow(order, isActive: true);
+                },
+              ),
+            ),
+            // Dots indicator
+            if (_activeOrders.length > 1)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(_activeOrders.length, (i) {
+                    return AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      width: i == _currentOrderIndex ? 16 : 6,
+                      height: 6,
+                      margin: const EdgeInsets.symmetric(horizontal: 2),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(3),
+                        color: i == _currentOrderIndex
+                            ? Colors.orange
+                            : Colors.grey.shade300,
+                      ),
+                    );
+                  }),
+                ),
+              )
+            else
+              const SizedBox(height: 8),
+          ],
+        ),
+      );
+    }
 
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.15),
-            blurRadius: 16,
-            offset: const Offset(0, -4),
-          ),
-        ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Tutamak çubuğu
-          Padding(
-            padding: const EdgeInsets.only(top: 10),
-            child: Container(
-              width: 36,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.grey.shade300,
-                borderRadius: BorderRadius.circular(2),
+    // Önerilen sipariş (tek kart)
+    if (_suggestedOrder != null) {
+      return Container(
+        margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.15),
+              blurRadius: 16,
+              offset: const Offset(0, -4),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
             ),
-          ),
-          // Ana içerik satırı
-          InkWell(
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => OrderDetailScreen(order: order),
-              ),
-            ),
-            borderRadius: BorderRadius.circular(20),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
-              child: Row(
-                children: [
-                  // İkon
-                  Container(
-                    width: 46,
-                    height: 46,
-                    decoration: BoxDecoration(
-                      color: isActive
-                          ? Colors.blue.shade50
-                          : Colors.orange.shade50,
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Icon(
-                      isActive ? Icons.delivery_dining : Icons.restaurant,
-                      color: isActive ? Colors.blue : Colors.orange,
-                      size: 24,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  // Bilgiler
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Text(
-                              '#${order.orderNumber}',
-                              style: TextStyle(
-                                color: Colors.grey.shade500,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Flexible(
-                              child: Text(
-                                displayName,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 15,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 3),
-                        Row(
-                          children: [
-                            Icon(Icons.location_on,
-                                size: 13, color: Colors.grey.shade500),
-                            const SizedBox(width: 3),
-                            Expanded(
-                              child: Text(
-                                displayAddress,
-                                style: TextStyle(
-                                  color: Colors.grey.shade600,
-                                  fontSize: 12,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                  const Icon(Icons.chevron_right, color: Colors.grey),
-                ],
-              ),
-            ),
-          ),
-          // Kabul Et butonu (sadece öneri için)
-          if (!isActive && _suggestedOrder != null)
+            _buildOrderRow(_suggestedOrder!, isActive: false),
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
               child: SizedBox(
@@ -730,28 +919,102 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 ),
               ),
             ),
-          // Aktif sipariş varsa çoklu kart önizleme
-          if (isActive && _activeOrders.length > 1)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-              child: Row(
+          ],
+        ),
+      );
+    }
+
+    return const SizedBox.shrink();
+  }
+
+  Widget _buildOrderRow(Order order, {required bool isActive}) {
+    final displayName = isActive
+        ? order.customerName
+        : (order.restaurant?.name ?? order.pickupAddress.title ?? 'Restoran');
+    final displayAddress = isActive
+        ? order.deliveryAddress.fullAddress
+        : (order.restaurant?.address ?? order.pickupAddress.fullAddress);
+
+    return InkWell(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => OrderDetailScreen(order: order),
+        ),
+      ),
+      borderRadius: BorderRadius.circular(20),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+        child: Row(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: isActive ? Colors.blue.shade50 : Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(
+                isActive ? Icons.delivery_dining : Icons.restaurant,
+                color: isActive ? Colors.blue : Colors.orange,
+                size: 22,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(
-                    Icons.layers_outlined,
-                    size: 14,
-                    color: Colors.grey.shade500,
+                  Row(
+                    children: [
+                      Text(
+                        '#${order.orderNumber}',
+                        style: TextStyle(
+                          color: Colors.grey.shade500,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          displayName,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 6),
-                  Text(
-                    '${_activeOrders.length} aktif sipariş — detay için dokun',
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                  const SizedBox(height: 3),
+                  Row(
+                    children: [
+                      Icon(Icons.location_on,
+                          size: 12, color: Colors.grey.shade500),
+                      const SizedBox(width: 3),
+                      Expanded(
+                        child: Text(
+                          displayAddress,
+                          style: TextStyle(
+                            color: Colors.grey.shade600,
+                            fontSize: 12,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
             ),
-          if (isActive && _activeOrders.length == 1)
-            const SizedBox(height: 6),
-        ],
+            const Icon(Icons.chevron_right, color: Colors.grey),
+          ],
+        ),
       ),
     );
   }
@@ -864,16 +1127,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 onTap: () {
                   Navigator.pop(context);
                   Navigator.of(context).pushNamed(AppRoutes.profile);
-                },
-              ),
-              _drawerItem(
-                context,
-                icon: Icons.inventory_2_outlined,
-                color: Colors.teal,
-                title: 'Sipariş Havuzu',
-                onTap: () {
-                  Navigator.pop(context);
-                  Navigator.of(context).pushNamed(AppRoutes.orderPool);
                 },
               ),
               _drawerItem(
