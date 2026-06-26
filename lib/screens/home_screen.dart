@@ -27,6 +27,7 @@ class HomeScreen extends ConsumerStatefulWidget {
 }
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
+  List<Order> _activeOrders = [];
   Order? _suggestedOrder;
   Position? _myPosition;
   bool _isRefreshing = false;
@@ -53,12 +54,73 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   Future<void> _updateSuggestedOrder() async {
     final ordersState = ref.read(ordersProvider);
-    if (ordersState.activeOrders.isNotEmpty) {
+    final activeOrders = ordersState.activeOrders;
+    final availableOrders = ordersState.availableOrders;
+
+    if (mounted) setState(() => _activeOrders = activeOrders);
+
+    // Maksimum 4 sipariş
+    if (activeOrders.length >= 4) {
       if (mounted) setState(() => _suggestedOrder = null);
       return;
     }
-    final nearest = await _findNearestOrder(ordersState.availableOrders);
-    if (mounted) setState(() => _suggestedOrder = nearest);
+
+    // Aktif sipariş yoksa → en yakın pending
+    if (activeOrders.isEmpty) {
+      final nearest = await _findNearestOrder(availableOrders);
+      if (mounted) setState(() => _suggestedOrder = nearest);
+      return;
+    }
+
+    // Aktif sipariş varsa → uyumlu sipariş bul
+    final compatible = await _findCompatibleOrder(availableOrders, activeOrders);
+    if (mounted) setState(() => _suggestedOrder = compatible);
+  }
+
+  Future<Order?> _findCompatibleOrder(
+    List<Order> available,
+    List<Order> activeOrders,
+  ) async {
+    final compatible = <Order>[];
+
+    for (final order in available) {
+      // Aynı restoran mı?
+      final sameRestaurant = activeOrders.any(
+        (active) =>
+            active.restaurantId != null &&
+            order.restaurantId != null &&
+            active.restaurantId == order.restaurantId,
+      );
+
+      if (sameRestaurant) {
+        compatible.add(order);
+        continue;
+      }
+
+      // Teslimat adresi 2km içinde mi?
+      final orderLat = order.deliveryLatitude;
+      final orderLng = order.deliveryLongitude;
+      if (orderLat == 0 && orderLng == 0) continue;
+
+      final isClose = activeOrders.any((active) {
+        final activeLat = active.deliveryLatitude;
+        final activeLng = active.deliveryLongitude;
+        if (activeLat == 0 && activeLng == 0) return false;
+
+        final distance = Geolocator.distanceBetween(
+          activeLat,
+          activeLng,
+          orderLat,
+          orderLng,
+        );
+        return distance <= 2000;
+      });
+
+      if (isClose) compatible.add(order);
+    }
+
+    if (compatible.isEmpty) return null;
+    return await _findNearestOrder(compatible);
   }
 
   Future<Order?> _findNearestOrder(List<Order> orders) async {
@@ -158,8 +220,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final courier = ref.watch(courierProvider);
     final ordersState = ref.watch(ordersProvider);
     final isOnline = courier?.isOnline ?? false;
-    final activeOrders = ordersState.activeOrders;
-    final activeOrder = activeOrders.isNotEmpty ? activeOrders.first : null;
+    final activeOrder = _activeOrders.isNotEmpty ? _activeOrders.first : null;
 
     return Scaffold(
       drawer: _buildDrawer(context),
@@ -319,22 +380,309 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               ),
             ),
 
-            // ── Harita ───────────────────────────────────────────────
-            _buildMapSection(activeOrder ?? _suggestedOrder),
-
             // ── Online Toggle Kartı ───────────────────────────────────
             _buildOnlineToggleCard(context, courier, isOnline),
 
-            // ── Sipariş Bölümü ────────────────────────────────────────
+            // ── İçerik (harita + siparişler) ─────────────────────────
             Expanded(
               child: RefreshIndicator(
                 onRefresh: _refreshOrders,
                 color: AppTheme.primaryLight,
-                child: _buildOrderSection(context, ordersState),
+                child: _buildContent(context, ordersState),
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  // ── İçerik (harita + siparişler) ────────────────────────────────────────────
+  Widget _buildContent(BuildContext context, OrdersState ordersState) {
+    final isLoading = (ordersState.isLoading || _isRefreshing) &&
+        _activeOrders.isEmpty &&
+        _suggestedOrder == null;
+
+    if (isLoading) {
+      return const Center(
+        child: CircularProgressIndicator(color: AppTheme.primaryLight),
+      );
+    }
+
+    if (ordersState.error != null && _activeOrders.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, size: 64, color: AppTheme.accentRed),
+              const SizedBox(height: 16),
+              Text(
+                'Hata: ${ordersState.error}',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: AppTheme.textSecondary),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _refreshOrders,
+                child: const Text('Yeniden Dene'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Harita
+          _buildMapSection(_activeOrders.firstOrNull ?? _suggestedOrder),
+
+          // ── Aktif Siparişlerim ─────────────────────────────────────
+          if (_activeOrders.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Aktif Siparişlerim',
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade100,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      '${_activeOrders.length} / 4',
+                      style: TextStyle(
+                        color: Colors.orange.shade800,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            SizedBox(
+              height: 170,
+              child: ListView.builder(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                itemCount: _activeOrders.length,
+                itemBuilder: (context, i) {
+                  final order = _activeOrders[i];
+                  return SizedBox(
+                    width: 280,
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: 12),
+                      child: OrderCard(
+                        order: order,
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => OrderDetailScreen(order: order),
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
+
+          // ── 4 Sipariş Limit Uyarısı ───────────────────────────────
+          if (_activeOrders.length >= 4)
+            Container(
+              margin: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Colors.yellow.shade50,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.yellow.shade400),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.orange),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Maksimum 4 aktif siparişin var. Birini tamamla, sonra yeni alabilirsin.',
+                      style: TextStyle(fontSize: 13),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+          // ── Önerilen Sipariş ──────────────────────────────────────
+          if (_suggestedOrder != null) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
+              child: Text(
+                _activeOrders.isEmpty
+                    ? '🎯 Sizin İçin Önerilen Sipariş'
+                    : '🎯 Önerilen Yeni Sipariş',
+                style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.orange.shade300, width: 2),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.orange.withValues(alpha: 0.08),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Uyumluluk rozeti (aktif sipariş varsa)
+                  if (_activeOrders.isNotEmpty) ...[
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.green.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.green.shade200),
+                      ),
+                      child: Text(
+                        '✅ Mevcut sipariş(ler)inle uyumlu',
+                        style: TextStyle(
+                          color: Colors.green.shade800,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                  ],
+                  // Sipariş bilgileri
+                  OrderCard(
+                    order: _suggestedOrder!,
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) =>
+                            OrderDetailScreen(order: _suggestedOrder!),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  // Kabul et butonu
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: _isAccepting
+                          ? null
+                          : () => _acceptSuggestedOrder(_suggestedOrder!),
+                      icon: _isAccepting
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(Icons.add_circle_outline),
+                      label: Text(
+                        _isAccepting
+                            ? 'İşleniyor...'
+                            : (_activeOrders.isEmpty
+                                ? 'Siparişi Kabul Et'
+                                : 'Bu Siparişi de Al'),
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 13),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+
+          // ── Hiç sipariş yok ───────────────────────────────────────
+          if (_activeOrders.isEmpty && _suggestedOrder == null)
+            Padding(
+              padding: const EdgeInsets.all(32),
+              child: Center(
+                child: Column(
+                  children: [
+                    Icon(
+                      Icons.coffee_outlined,
+                      size: 72,
+                      color: Colors.grey.shade300,
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Şu an müsait sipariş yok',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Yeni sipariş gelince bildirim alacaksın',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    OutlinedButton.icon(
+                      onPressed: _refreshOrders,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Yenile'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          const SizedBox(height: 90), // FAB boşluğu
+        ],
       ),
     );
   }
@@ -395,7 +743,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         ),
       if (hasRestaurant)
         Marker(
-          point: LatLng(restaurantLat!, restaurantLng!),
+          point: LatLng(restaurantLat as double, restaurantLng as double),
           width: 40,
           height: 40,
           child: Container(
@@ -427,189 +775,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
           MarkerLayer(markers: markers),
         ],
-      ),
-    );
-  }
-
-  // ── Sipariş Bölümü ──────────────────────────────────────────────────────────
-  Widget _buildOrderSection(BuildContext context, OrdersState ordersState) {
-    final activeOrders = ordersState.activeOrders;
-    final isLoading = (ordersState.isLoading || _isRefreshing) &&
-        activeOrders.isEmpty &&
-        _suggestedOrder == null;
-
-    if (isLoading) {
-      return const Center(
-        child: CircularProgressIndicator(color: AppTheme.primaryLight),
-      );
-    }
-
-    // Aktif sipariş varsa onu göster
-    if (activeOrders.isNotEmpty) {
-      final activeOrder = activeOrders.first;
-      return ListView(
-        padding: const EdgeInsets.all(16),
-        physics: const AlwaysScrollableScrollPhysics(),
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: Colors.orange.shade50,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.orange.shade200),
-            ),
-            child: const Row(
-              children: [
-                Icon(Icons.delivery_dining, color: Colors.orange),
-                SizedBox(width: 8),
-                Text(
-                  '🚴 Aktif siparişiniz var',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.orange,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 12),
-          OrderCard(
-            order: activeOrder,
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => OrderDetailScreen(order: activeOrder),
-              ),
-            ),
-          ),
-        ],
-      );
-    }
-
-    // Önerilen sipariş varsa onu göster
-    if (_suggestedOrder != null) {
-      final order = _suggestedOrder!;
-      return ListView(
-        padding: const EdgeInsets.all(16),
-        physics: const AlwaysScrollableScrollPhysics(),
-        children: [
-          const Text(
-            '🎯 Sizin İçin Önerilen Sipariş',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: AppTheme.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 8),
-          OrderCard(
-            order: order,
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => OrderDetailScreen(order: order),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: _isAccepting ? null : () => _acceptSuggestedOrder(order),
-              icon: _isAccepting
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Icon(Icons.check_circle_outline),
-              label: Text(
-                _isAccepting ? 'İşleniyor...' : 'Siparişi Kabul Et',
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-            ),
-          ),
-        ],
-      );
-    }
-
-    // Sipariş yok
-    if (ordersState.error != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.error_outline, size: 64, color: AppTheme.accentRed),
-              const SizedBox(height: 16),
-              Text(
-                'Hata: ${ordersState.error}',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: AppTheme.textSecondary),
-              ),
-              const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: _refreshOrders,
-                child: const Text('Yeniden Dene'),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    return Center(
-      child: SingleChildScrollView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                Icons.coffee_outlined,
-                size: 72,
-                color: Colors.grey.shade300,
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                'Şu an müsait sipariş yok',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: AppTheme.textSecondary,
-                ),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'Yeni sipariş gelince bildirim alacaksın',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: AppTheme.textSecondary, fontSize: 14),
-              ),
-              const SizedBox(height: 24),
-              OutlinedButton.icon(
-                onPressed: _refreshOrders,
-                icon: const Icon(Icons.refresh),
-                label: const Text('Yenile'),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }

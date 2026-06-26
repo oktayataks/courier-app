@@ -185,7 +185,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
 
       return true;
     } catch (e) {
-      print('Mesafe kontrolü hatası: $e');
+      debugPrint('Mesafe kontrolü hatası: $e');
       return true;
     }
   }
@@ -785,10 +785,4 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     }
   }
 
-  Future<void> _launchUrl(String url) async {
-    final uri = Uri.parse(url);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri);
-    }
-  }
 }
