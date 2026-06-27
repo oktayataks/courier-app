@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
@@ -97,37 +98,73 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
 
   Future<void> _updateStatus(Order order, String newStatus) async {
     if (_isUpdating) return;
-
-    // Teslim işleminde mesafe kontrolü
-    if (newStatus == 'delivered') {
-      setState(() => _isUpdating = true);
-      final canDeliver = await _checkDeliveryDistance(order);
-      if (!canDeliver) {
-        if (mounted) setState(() => _isUpdating = false);
-        return;
-      }
-    } else {
-      setState(() => _isUpdating = true);
-    }
+    setState(() => _isUpdating = true);
 
     try {
-      final ok = await ref
-          .read(ordersProvider.notifier)
-          .updateOrderStatus(order.id, newStatus);
+      // Teslim işleminde mesafe kontrolü
+      if (newStatus == 'delivered') {
+        final canDeliver = await _checkDeliveryDistance(order);
+        if (!canDeliver) {
+          setState(() => _isUpdating = false);
+          return;
+        }
+      }
+
+      final token = await StorageService.getToken();
+
+      debugPrint('🔄 Status güncelleniyor: $newStatus');
+      debugPrint('🔄 Order ID: ${order.id}');
+
+      final response = await http.patch(
+        Uri.parse('${AppConstants.apiBaseUrl}/orders/${order.id}/status'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+        body: json.encode({'status': newStatus}),
+      );
+
+      debugPrint('📥 Response: ${response.statusCode}');
+      debugPrint('📥 Body: ${response.body}');
 
       if (!mounted) return;
-      if (ok) {
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        // Provider'ı da güncelle
+        await ref
+            .read(ordersProvider.notifier)
+            .updateOrderStatus(order.id, newStatus);
+
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${_getStatusLabel(newStatus)} olarak güncellendi!'),
+          const SnackBar(
+            content: Text('✅ Durum güncellendi!'),
             backgroundColor: Colors.green,
           ),
         );
-        Navigator.pop(context);
+        Navigator.pop(context, true);
       } else {
+        final errorMsg = () {
+          try {
+            final data = json.decode(response.body) as Map<String, dynamic>;
+            return data['message']?.toString() ?? 'Bilinmeyen hata';
+          } catch (_) {
+            return response.body.isNotEmpty ? response.body : 'Hata kodu: ${response.statusCode}';
+          }
+        }();
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Durum güncellenemedi'),
+          SnackBar(
+            content: Text('❌ $errorMsg'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('❌ Exception: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('❌ Hata: $e'),
             backgroundColor: Colors.red,
           ),
         );

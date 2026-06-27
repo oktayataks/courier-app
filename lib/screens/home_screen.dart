@@ -20,7 +20,7 @@ import '../widgets/order_card.dart';
 import 'help_screen.dart';
 import 'order_detail_screen.dart';
 
-enum CourierStatus { online, onBreak }
+enum CourierStatus { online, onBreak, offline }
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -237,6 +237,29 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     }
   }
 
+  // ── Durum renk/metin ─────────────────────────────────────────────────────────
+  Color get _statusColor {
+    switch (_status) {
+      case CourierStatus.online:
+        return Colors.green;
+      case CourierStatus.onBreak:
+        return Colors.orange;
+      case CourierStatus.offline:
+        return Colors.grey;
+    }
+  }
+
+  String get _statusText {
+    switch (_status) {
+      case CourierStatus.online:
+        return 'Online';
+      case CourierStatus.onBreak:
+        return 'Molada';
+      case CourierStatus.offline:
+        return 'Offline';
+    }
+  }
+
   // ── Timer başlatıcılar ───────────────────────────────────────────────────────
   void _startOfferCheck() {
     _offerCheckTimer = Timer.periodic(
@@ -392,6 +415,93 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 ),
               ],
 
+              // Offline seçeneği (her zaman altta)
+              if (_status != CourierStatus.offline) ...[
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 6),
+                  child: Divider(),
+                ),
+                _buildStatusOption(
+                  icon: Icons.power_settings_new,
+                  color: Colors.grey,
+                  title: 'Offline Ol',
+                  subtitle: 'Çalışmayı bitir',
+                  onTap: () async {
+                    if (_activeOrders.isNotEmpty) {
+                      Navigator.pop(ctx);
+                      showDialog(
+                        context: context,
+                        builder: (dialogCtx) => AlertDialog(
+                          icon: const Icon(Icons.warning,
+                              color: Colors.orange, size: 48),
+                          title: const Text('Aktif Siparişin Var!'),
+                          content: const Text('Önce siparişlerini tamamla.'),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(dialogCtx),
+                              child: const Text('Tamam'),
+                            ),
+                          ],
+                        ),
+                      );
+                      return;
+                    }
+                    setState(() {
+                      _status = CourierStatus.offline;
+                      _breakUntil = null;
+                    });
+                    Navigator.pop(ctx);
+                    final courierId = await _fetchCourierId();
+                    if (courierId != null) {
+                      try {
+                        final token = await StorageService.getToken();
+                        await http.patch(
+                          Uri.parse(
+                              '${AppConstants.apiBaseUrl}/couriers/$courierId/status'),
+                          headers: {
+                            'Authorization': 'Bearer $token',
+                            'Content-Type': 'application/json',
+                          },
+                          body: json.encode({'isOnline': false}),
+                        );
+                      } catch (e) {
+                        debugPrint('Offline hatası: $e');
+                      }
+                    }
+                  },
+                ),
+              ],
+
+              // Offline → Online geçişi
+              if (_status == CourierStatus.offline)
+                _buildStatusOption(
+                  icon: Icons.check_circle,
+                  color: Colors.green,
+                  title: 'Çevrimiçi Ol',
+                  subtitle: 'Siparişlere geri dön',
+                  onTap: () async {
+                    setState(() => _status = CourierStatus.online);
+                    Navigator.pop(ctx);
+                    final courierId = await _fetchCourierId();
+                    if (courierId != null) {
+                      try {
+                        final token = await StorageService.getToken();
+                        await http.patch(
+                          Uri.parse(
+                              '${AppConstants.apiBaseUrl}/couriers/$courierId/status'),
+                          headers: {
+                            'Authorization': 'Bearer $token',
+                            'Content-Type': 'application/json',
+                          },
+                          body: json.encode({'isOnline': true}),
+                        );
+                      } catch (e) {
+                        debugPrint('Online hatası: $e');
+                      }
+                    }
+                  },
+                ),
+
               const SizedBox(height: 8),
             ],
           ),
@@ -452,6 +562,32 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   // ── Mola ─────────────────────────────────────────────────────────────────────
   Future<void> _startBreak(BuildContext ctx, int minutes) async {
     Navigator.pop(ctx);
+
+    // Aktif sipariş varsa molaya izin verme
+    if (_activeOrders.isNotEmpty) {
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (dialogCtx) => AlertDialog(
+            icon: const Icon(Icons.warning_amber,
+                color: Colors.orange, size: 48),
+            title: const Text('Aktif Siparişin Var!'),
+            content: const Text(
+              'Aktif siparişlerini teslim etmeden molaya geçemezsin.',
+              textAlign: TextAlign.center,
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogCtx),
+                child: const Text('Tamam'),
+              ),
+            ],
+          ),
+        );
+      }
+      return;
+    }
+
     try {
       final token = await StorageService.getToken();
       final response = await http.post(
@@ -809,7 +945,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ],
         ),
         actions: [
-          // Durum pill butonu (Online / Molada)
+          // Durum pill butonu (Online / Molada / Offline)
           Padding(
             padding: const EdgeInsets.only(right: 4),
             child: GestureDetector(
@@ -819,15 +955,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                 decoration: BoxDecoration(
-                  color: _status == CourierStatus.online
-                      ? Colors.green.shade50
-                      : Colors.orange.shade50,
+                  color: _statusColor.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: _status == CourierStatus.online
-                        ? Colors.green
-                        : Colors.orange,
-                  ),
+                  border: Border.all(color: _statusColor),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -837,33 +967,36 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       width: 8,
                       height: 8,
                       decoration: BoxDecoration(
-                        color: _status == CourierStatus.online
-                            ? Colors.green
-                            : Colors.orange,
+                        color: _statusColor,
                         shape: BoxShape.circle,
                       ),
                     ),
                     const SizedBox(width: 5),
                     Text(
-                      _status == CourierStatus.online ? 'Online' : 'Molada',
+                      _statusText,
                       style: TextStyle(
-                        color: _status == CourierStatus.online
-                            ? Colors.green.shade800
-                            : Colors.orange.shade800,
+                        color: _statusColor,
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
                     const SizedBox(width: 2),
-                    Icon(
-                      Icons.arrow_drop_down,
-                      size: 16,
-                      color: _status == CourierStatus.online
-                          ? Colors.green.shade800
-                          : Colors.orange.shade800,
-                    ),
+                    Icon(Icons.arrow_drop_down,
+                        size: 16, color: _statusColor),
                   ],
                 ),
+              ),
+            ),
+          ),
+          // Yardım butonu
+          IconButton(
+            icon: const Icon(Icons.support_agent, color: Colors.red),
+            tooltip: 'Yardım',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) =>
+                    HelpScreen(activeOrder: _activeOrders.firstOrNull),
               ),
             ),
           ),
@@ -1671,42 +1804,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 onTap: () {
                   Navigator.pop(context);
                   Navigator.of(context).pushNamed(AppRoutes.invoices);
-                },
-              ),
-
-              _drawerItem(
-                context,
-                icon: Icons.inventory_2_outlined,
-                color: Colors.purple,
-                title: 'Sipariş Havuzu',
-                subtitle: 'Tüm bekleyen siparişler',
-                onTap: () {
-                  Navigator.pop(context);
-                  Navigator.of(context).pushNamed(AppRoutes.orderPool);
-                },
-              ),
-
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                child: Divider(),
-              ),
-
-              _drawerItem(
-                context,
-                icon: Icons.support_agent_rounded,
-                color: Colors.red,
-                title: 'Yazılı Destek',
-                subtitle: 'Mola, kaza, müşteri sorunları',
-                onTap: () {
-                  Navigator.pop(context);
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => HelpScreen(
-                        activeOrder: _activeOrders.firstOrNull,
-                      ),
-                    ),
-                  );
                 },
               ),
 
