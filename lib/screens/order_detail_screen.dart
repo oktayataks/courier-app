@@ -108,10 +108,33 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
           setState(() => _isUpdating = false);
           return;
         }
+
+        // Sipariş hâlâ "assigned" durumundaysa önce picked_up yap
+        if (order.status == 'assigned') {
+          debugPrint('🔄 Önce picked_up yapılıyor...');
+          final token = await StorageService.getToken();
+          final pickupResponse = await http.patch(
+            Uri.parse(
+                '${AppConstants.apiBaseUrl}/orders/${order.id}/status'),
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Content-Type': 'application/json',
+            },
+            body: json.encode({'status': 'picked_up'}),
+          );
+          debugPrint('📥 Picked_up response: ${pickupResponse.statusCode}');
+
+          if (pickupResponse.statusCode != 200 &&
+              pickupResponse.statusCode != 201) {
+            throw Exception(
+                'picked_up yapılamadı (${pickupResponse.statusCode})');
+          }
+          // Kısa bekleme — backend'in state'i yazmasını bekle
+          await Future.delayed(const Duration(milliseconds: 300));
+        }
       }
 
       final token = await StorageService.getToken();
-
       debugPrint('🔄 Status güncelleniyor: $newStatus');
       debugPrint('🔄 Order ID: ${order.id}');
 
@@ -130,7 +153,6 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
       if (!mounted) return;
 
       if (response.statusCode == 200 || response.statusCode == 201) {
-        // Provider'ı da güncelle
         await ref
             .read(ordersProvider.notifier)
             .updateOrderStatus(order.id, newStatus);
@@ -148,7 +170,9 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
             final data = json.decode(response.body) as Map<String, dynamic>;
             return data['message']?.toString() ?? 'Bilinmeyen hata';
           } catch (_) {
-            return response.body.isNotEmpty ? response.body : 'Hata kodu: ${response.statusCode}';
+            return response.body.isNotEmpty
+                ? response.body
+                : 'Hata kodu: ${response.statusCode}';
           }
         }();
         ScaffoldMessenger.of(context).showSnackBar(
