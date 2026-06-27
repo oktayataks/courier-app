@@ -51,6 +51,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   // Backend'deki gerçek courier ID (lazy-fetch)
   String? _courierId;
 
+  // Otomatik senkron
+  Timer? _syncTimer;
+  bool _isSyncing = false;
+  DateTime? _lastSync;
+
   @override
   void initState() {
     super.initState();
@@ -61,6 +66,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     });
     _startOfferCheck();
     _startBreakCheck();
+    _startSyncTimer();
   }
 
   @override
@@ -68,6 +74,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     _pageController.dispose();
     _offerCheckTimer?.cancel();
     _breakCheckTimer?.cancel();
+    _syncTimer?.cancel();
     super.dispose();
   }
 
@@ -79,6 +86,84 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     await ref.read(ordersProvider.notifier).loadOrders();
     await _updateSuggestedOrder();
     if (mounted) setState(() => _isRefreshing = false);
+  }
+
+  void _startSyncTimer() {
+    _syncTimer?.cancel();
+    _syncTimer = Timer.periodic(
+      const Duration(seconds: 15),
+      (_) => _syncData(),
+    );
+  }
+
+  Future<void> _syncData() async {
+    if (!mounted || _isSyncing) return;
+    setState(() => _isSyncing = true);
+
+    try {
+      final oldOrderIds = _activeOrders.map((o) => o.id).toSet();
+      final oldStatuses = {for (final o in _activeOrders) o.id: o.status};
+
+      await ref.read(ordersProvider.notifier).loadOrders();
+      await _updateSuggestedOrder();
+
+      if (!mounted) return;
+
+      final newOrderIds = _activeOrders.map((o) => o.id).toSet();
+
+      // Listeden kalkan siparişler
+      final removedIds = oldOrderIds.difference(newOrderIds);
+      if (removedIds.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '${removedIds.length} sipariş listenizden güncellendi',
+            ),
+            backgroundColor: Colors.blue,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+
+      // Durumu değişen siparişler
+      for (final order in _activeOrders) {
+        final oldStatus = oldStatuses[order.id];
+        if (oldStatus != null && oldStatus != order.status) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '#${order.orderNumber} → ${_statusLabel(order.status)}',
+              ),
+              backgroundColor: Colors.blue,
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+      }
+
+      _lastSync = DateTime.now();
+    } catch (e) {
+      debugPrint('Sync error: $e');
+    } finally {
+      if (mounted) setState(() => _isSyncing = false);
+    }
+  }
+
+  String _statusLabel(String status) {
+    switch (status) {
+      case 'pending':
+        return 'Bekliyor';
+      case 'assigned':
+        return 'Atandı';
+      case 'picked_up':
+        return 'Yolda';
+      case 'delivered':
+        return 'Teslim Edildi';
+      case 'cancelled':
+        return 'İptal';
+      default:
+        return status;
+    }
   }
 
   Future<void> _updateSuggestedOrder() async {
@@ -976,6 +1061,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 fontWeight: FontWeight.bold,
               ),
             ),
+            const SizedBox(width: 8),
+            if (_isSyncing)
+              const SizedBox(
+                width: 12,
+                height: 12,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation(Colors.blue),
+                ),
+              ),
           ],
         ),
         actions: [
@@ -1066,8 +1161,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       drawer: _buildDrawer(context, user?.fullName),
 
       // ── Body: Stack (harita + kartlar) ─────────────────────────────────────
-      body: Stack(
-        children: [
+      body: RefreshIndicator(
+        onRefresh: _syncData,
+        child: Stack(
+          children: [
           // Tam ekran harita
           _buildMap(displayOrder),
 
@@ -1214,6 +1311,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               ),
             ),
         ],
+        ),
       ),
     );
   }
