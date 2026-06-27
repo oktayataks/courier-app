@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -19,7 +20,7 @@ import '../widgets/order_card.dart';
 import 'help_screen.dart';
 import 'order_detail_screen.dart';
 
-enum HomeCourierStatus { online, onBreak, offline }
+enum CourierStatus { online, onBreak }
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -41,7 +42,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   final PageController _pageController = PageController();
 
   // Kurye durumu
-  HomeCourierStatus _courierStatus = HomeCourierStatus.online;
+  CourierStatus _status = CourierStatus.online;
+  DateTime? _breakUntil;
+  Timer? _offerCheckTimer;
+  Timer? _breakCheckTimer;
+  Order? _currentOffer;
 
   // Backend'deki gerçek courier ID (lazy-fetch)
   String? _courierId;
@@ -54,11 +59,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       ref.read(courierProvider.notifier).loadCourier();
       _refreshOrders();
     });
+    _startOfferCheck();
+    _startBreakCheck();
   }
 
   @override
   void dispose() {
     _pageController.dispose();
+    _offerCheckTimer?.cancel();
+    _breakCheckTimer?.cancel();
     super.dispose();
   }
 
@@ -228,118 +237,188 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     }
   }
 
-  MaterialColor _getStatusColor() {
-    switch (_courierStatus) {
-      case HomeCourierStatus.online:
-        return Colors.green;
-      case HomeCourierStatus.onBreak:
-        return Colors.orange;
-      case HomeCourierStatus.offline:
-        return Colors.grey;
+  // ── Timer başlatıcılar ───────────────────────────────────────────────────────
+  void _startOfferCheck() {
+    _offerCheckTimer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => _checkForOffer(),
+    );
+  }
+
+  void _startBreakCheck() {
+    _breakCheckTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _checkBreakStatus(),
+    );
+  }
+
+  Future<void> _checkBreakStatus() async {
+    if (_status == CourierStatus.onBreak && _breakUntil != null) {
+      if (DateTime.now().isAfter(_breakUntil!)) {
+        setState(() {
+          _status = CourierStatus.online;
+          _breakUntil = null;
+        });
+        await _endBreakAPI();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('☕ Molan bitti, çevrimiçi oldun!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      }
     }
   }
 
-  String _getStatusText() {
-    switch (_courierStatus) {
-      case HomeCourierStatus.online:
-        return 'Online';
-      case HomeCourierStatus.onBreak:
-        return 'Molada';
-      case HomeCourierStatus.offline:
-        return 'Offline';
-    }
-  }
-
+  // ── Durum menüsü ─────────────────────────────────────────────────────────────
   void _showStatusMenu() {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      builder: (ctx) => Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.grey.shade300,
-                borderRadius: BorderRadius.circular(2),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'Durumunu Seç',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 16),
-            _buildStatusOption(
-              ctx,
-              HomeCourierStatus.online,
-              'Online',
-              'Yeni sipariş alabilirim',
-              Colors.green,
-              Icons.check_circle_outline,
-            ),
-            _buildStatusOption(
-              ctx,
-              HomeCourierStatus.onBreak,
-              'Molada',
-              'Geçici olarak duraklattım',
-              Colors.orange,
-              Icons.coffee_outlined,
-            ),
-            _buildStatusOption(
-              ctx,
-              HomeCourierStatus.offline,
-              'Offline',
-              'Çalışmıyorum',
-              Colors.grey,
-              Icons.pause_circle_outline,
-            ),
-          ],
+              const SizedBox(height: 16),
+              const Text(
+                'Durum',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 16),
+
+              // Online seçeneği (molada değilse göster)
+              if (_status != CourierStatus.online)
+                _buildStatusOption(
+                  icon: Icons.check_circle,
+                  color: Colors.green,
+                  title: 'Çevrimiçi',
+                  subtitle: 'Yeni siparişler alabilirim',
+                  onTap: () async {
+                    if (_breakUntil != null &&
+                        DateTime.now().isBefore(_breakUntil!)) {
+                      final remaining =
+                          _breakUntil!.difference(DateTime.now());
+                      Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                              '⏳ Mola bitmesine ${remaining.inMinutes} dakika var'),
+                          backgroundColor: Colors.orange,
+                        ),
+                      );
+                      return;
+                    }
+                    setState(() {
+                      _status = CourierStatus.online;
+                      _breakUntil = null;
+                    });
+                    Navigator.pop(ctx);
+                    await _endBreakAPI();
+                  },
+                ),
+
+              // Mola seçenekleri (online iken göster)
+              if (_status == CourierStatus.online) ...[
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Text(
+                    '☕ Mola Süresi',
+                    style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                  ),
+                ),
+                _buildStatusOption(
+                  icon: Icons.coffee,
+                  color: Colors.orange,
+                  title: '15 Dakika Mola',
+                  subtitle: 'Kısa mola',
+                  onTap: () => _startBreak(ctx, 15),
+                ),
+                _buildStatusOption(
+                  icon: Icons.lunch_dining,
+                  color: Colors.orange,
+                  title: '30 Dakika Mola',
+                  subtitle: 'Uzun mola',
+                  onTap: () => _startBreak(ctx, 30),
+                ),
+              ],
+
+              // Mola sayacı (molada iken göster)
+              if (_status == CourierStatus.onBreak && _breakUntil != null) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    children: [
+                      const Icon(Icons.coffee, size: 32, color: Colors.orange),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Mola Bitiş',
+                        style: TextStyle(color: Colors.orange.shade800),
+                      ),
+                      Text(
+                        '${_breakUntil!.hour.toString().padLeft(2, '0')}:${_breakUntil!.minute.toString().padLeft(2, '0')}',
+                        style: const TextStyle(
+                          fontSize: 32,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.orange,
+                        ),
+                      ),
+                      Text(
+                        '${_breakUntil!.difference(DateTime.now()).inMinutes} dakika kaldı',
+                        style: TextStyle(color: Colors.orange.shade700),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+
+              const SizedBox(height: 8),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildStatusOption(
-    BuildContext ctx,
-    HomeCourierStatus status,
-    String title,
-    String subtitle,
-    MaterialColor color,
-    IconData icon,
-  ) {
-    final isSelected = _courierStatus == status;
+  Widget _buildStatusOption({
+    required IconData icon,
+    required Color color,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
     return InkWell(
-      onTap: () async {
-        Navigator.pop(ctx);
-        setState(() => _courierStatus = status);
-        await _updateOnlineStatus(status);
-      },
+      onTap: onTap,
       borderRadius: BorderRadius.circular(12),
       child: Container(
         padding: const EdgeInsets.all(12),
         margin: const EdgeInsets.only(bottom: 8),
-        decoration: BoxDecoration(
-          color: isSelected ? color.shade50 : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isSelected ? color : Colors.grey.shade200,
-            width: isSelected ? 2 : 1,
-          ),
-        ),
         child: Row(
           children: [
             Container(
-              padding: const EdgeInsets.all(8),
+              padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: color.shade100,
+                color: color.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Icon(icon, color: color, size: 24),
@@ -352,26 +431,323 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   Text(
                     title,
                     style: const TextStyle(
-                      fontWeight: FontWeight.bold,
                       fontSize: 15,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
                   Text(
                     subtitle,
-                    style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                    style:
+                        TextStyle(color: Colors.grey.shade600, fontSize: 12),
                   ),
                 ],
               ),
             ),
-            if (isSelected)
-              Icon(Icons.check_circle, color: color),
           ],
         ),
       ),
     );
   }
 
-  /// Courier ID'yi önce önbellekten, yoksa /couriers/me'den alır.
+  // ── Mola ─────────────────────────────────────────────────────────────────────
+  Future<void> _startBreak(BuildContext ctx, int minutes) async {
+    Navigator.pop(ctx);
+    try {
+      final token = await StorageService.getToken();
+      final response = await http.post(
+        Uri.parse('${AppConstants.apiBaseUrl}/couriers/me/break'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+        body: json.encode({'minutes': minutes}),
+      );
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        final data = json.decode(response.body) as Map<String, dynamic>;
+        setState(() {
+          _status = CourierStatus.onBreak;
+          _breakUntil = DateTime.parse(data['breakUntil'] as String);
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('☕ $minutes dakikalık mola başladı'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('Mola hatası: $e');
+    }
+  }
+
+  Future<void> _endBreakAPI() async {
+    try {
+      final token = await StorageService.getToken();
+      await http.post(
+        Uri.parse('${AppConstants.apiBaseUrl}/couriers/me/break/end'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+    } catch (e) {
+      debugPrint('Mola bitirme hatası: $e');
+    }
+  }
+
+  // ── Teklif Kontrol ───────────────────────────────────────────────────────────
+  Future<void> _checkForOffer() async {
+    if (_status != CourierStatus.online) return;
+    if (_currentOffer != null) return; // Modal zaten açık
+    try {
+      final token = await StorageService.getToken();
+      final response = await http.get(
+        Uri.parse('${AppConstants.apiBaseUrl}/orders/offered/me'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      if (response.statusCode == 200 &&
+          response.body.isNotEmpty &&
+          response.body != 'null') {
+        final data = json.decode(response.body);
+        if (data != null && data['id'] != null) {
+          final offer = Order.fromJson(data as Map<String, dynamic>);
+          if (mounted) _showOfferModal(offer);
+        }
+      }
+    } catch (e) {
+      debugPrint('Teklif kontrolü hatası: $e');
+    }
+  }
+
+  void _showOfferModal(Order order) {
+    _currentOffer = order;
+    int remainingSeconds = 30;
+    Timer? countdownTimer;
+
+    showModalBottomSheet(
+      context: context,
+      isDismissible: false,
+      enableDrag: false,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) {
+          countdownTimer ??= Timer.periodic(
+            const Duration(seconds: 1),
+            (timer) {
+              if (remainingSeconds <= 0) {
+                timer.cancel();
+                Navigator.pop(ctx);
+                _rejectOffer(order.id, isTimeout: true);
+                return;
+              }
+              setModalState(() => remainingSeconds--);
+            },
+          );
+
+          return Container(
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            ),
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Geri sayım çemberi
+                Container(
+                  width: 80,
+                  height: 80,
+                  decoration: BoxDecoration(
+                    color: remainingSeconds > 10
+                        ? Colors.green.shade50
+                        : Colors.red.shade50,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: remainingSeconds > 10 ? Colors.green : Colors.red,
+                      width: 3,
+                    ),
+                  ),
+                  child: Center(
+                    child: Text(
+                      '$remainingSeconds',
+                      style: TextStyle(
+                        fontSize: 32,
+                        fontWeight: FontWeight.bold,
+                        color:
+                            remainingSeconds > 10 ? Colors.green : Colors.red,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  '🛵 Yeni Sipariş!',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 16),
+
+                // Sipariş detayları
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '#${order.orderNumber}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(children: [
+                        const Icon(Icons.restaurant,
+                            size: 15, color: Colors.orange),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            order.restaurant?.name ?? 'Restoran',
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ]),
+                      const SizedBox(height: 4),
+                      Row(children: [
+                        const Icon(Icons.location_on,
+                            size: 15, color: Colors.red),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            order.deliveryAddress.fullAddress,
+                            style: const TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ]),
+                      const SizedBox(height: 8),
+                      if (order.totalAmount != null)
+                        Text(
+                          '₺${order.totalAmount!.toStringAsFixed(2)}',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 18,
+                            color: Colors.green,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 20),
+
+                Row(children: [
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () {
+                        countdownTimer?.cancel();
+                        Navigator.pop(ctx);
+                        _rejectOffer(order.id);
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.grey.shade200,
+                        foregroundColor: Colors.black87,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: const Text('Reddet'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    flex: 2,
+                    child: ElevatedButton(
+                      onPressed: () {
+                        countdownTimer?.cancel();
+                        Navigator.pop(ctx);
+                        _acceptOffer(order.id);
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: const Text(
+                        '✅ Kabul Et',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
+                    ),
+                  ),
+                ]),
+              ],
+            ),
+          );
+        },
+      ),
+    ).then((_) {
+      countdownTimer?.cancel();
+      _currentOffer = null;
+    });
+  }
+
+  Future<void> _acceptOffer(String orderId) async {
+    try {
+      final token = await StorageService.getToken();
+      final response = await http.post(
+        Uri.parse('${AppConstants.apiBaseUrl}/orders/$orderId/accept-offer'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        await _refreshOrders();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('✅ Sipariş kabul edildi!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('Teklif kabul hatası: $e');
+    }
+  }
+
+  Future<void> _rejectOffer(String orderId, {bool isTimeout = false}) async {
+    try {
+      final token = await StorageService.getToken();
+      await http.post(
+        Uri.parse('${AppConstants.apiBaseUrl}/orders/$orderId/reject-offer'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+    } catch (e) {
+      debugPrint('Teklif red hatası: $e');
+    }
+
+    if (!isTimeout && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Sipariş reddedildi'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    }
+  }
+
+  // ── Courier ID (lazy-fetch) ──────────────────────────────────────────────────
   Future<String?> _fetchCourierId() async {
     if (_courierId != null) return _courierId;
     try {
@@ -390,49 +766,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       debugPrint('⚠️ Courier ID alınamadı: $e');
     }
     return _courierId;
-  }
-
-  Future<void> _updateOnlineStatus(HomeCourierStatus status) async {
-    final isOnline = status == HomeCourierStatus.online;
-
-    // Courier ID al
-    final courierId = await _fetchCourierId();
-    if (courierId == null) {
-      debugPrint('⚠️ Courier ID bulunamadı, status güncellenemiyor');
-      return;
-    }
-
-    try {
-      final token = await StorageService.getToken();
-      final response = await http.patch(
-        Uri.parse('${AppConstants.apiBaseUrl}/couriers/$courierId/status'),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json',
-        },
-        body: json.encode({'isOnline': isOnline}),
-      );
-      debugPrint(
-          '📡 Status güncellendi: ${response.statusCode} - ${response.body}');
-    } catch (e) {
-      debugPrint('❌ Status update error: $e');
-    }
-
-    if (!mounted) return;
-
-    final message = isOnline
-        ? 'Çevrimiçi oldunuz'
-        : status == HomeCourierStatus.onBreak
-            ? 'Molaya geçtiniz'
-            : 'Çevrimdışı oldunuz';
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        duration: const Duration(seconds: 2),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
   }
 
   // ── Build ────────────────────────────────────────────────────────────────────
@@ -476,18 +809,25 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ],
         ),
         actions: [
-          // Durum pill butonu (Online / Molada / Offline)
+          // Durum pill butonu (Online / Molada)
           Padding(
             padding: const EdgeInsets.only(right: 4),
             child: GestureDetector(
               onTap: _showStatusMenu,
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 250),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                 decoration: BoxDecoration(
-                  color: _getStatusColor().shade50,
+                  color: _status == CourierStatus.online
+                      ? Colors.green.shade50
+                      : Colors.orange.shade50,
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: _getStatusColor()),
+                  border: Border.all(
+                    color: _status == CourierStatus.online
+                        ? Colors.green
+                        : Colors.orange,
+                  ),
                 ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -497,23 +837,30 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       width: 8,
                       height: 8,
                       decoration: BoxDecoration(
-                        color: _getStatusColor(),
+                        color: _status == CourierStatus.online
+                            ? Colors.green
+                            : Colors.orange,
                         shape: BoxShape.circle,
                       ),
                     ),
                     const SizedBox(width: 5),
                     Text(
-                      _getStatusText(),
+                      _status == CourierStatus.online ? 'Online' : 'Molada',
                       style: TextStyle(
-                        color: _getStatusColor().shade800,
+                        color: _status == CourierStatus.online
+                            ? Colors.green.shade800
+                            : Colors.orange.shade800,
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
+                    const SizedBox(width: 2),
                     Icon(
                       Icons.arrow_drop_down,
                       size: 16,
-                      color: _getStatusColor().shade800,
+                      color: _status == CourierStatus.online
+                          ? Colors.green.shade800
+                          : Colors.orange.shade800,
                     ),
                   ],
                 ),
@@ -529,28 +876,34 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   Navigator.of(context).pushNamed(AppRoutes.profile);
                 case 'history':
                   Navigator.of(context).pushNamed(AppRoutes.orderHistory);
+                case 'notifications':
+                  break;
               }
             },
             itemBuilder: (context) => [
               const PopupMenuItem(
                 value: 'profile',
-                child: Row(
-                  children: [
-                    Icon(Icons.person_outline_rounded, color: Colors.indigo),
-                    SizedBox(width: 12),
-                    Text('Profil'),
-                  ],
-                ),
+                child: Row(children: [
+                  Icon(Icons.person_outline_rounded, color: Colors.indigo),
+                  SizedBox(width: 12),
+                  Text('Profil'),
+                ]),
               ),
               const PopupMenuItem(
                 value: 'history',
-                child: Row(
-                  children: [
-                    Icon(Icons.history_rounded, color: Colors.purple),
-                    SizedBox(width: 12),
-                    Text('Geçmiş Siparişler'),
-                  ],
-                ),
+                child: Row(children: [
+                  Icon(Icons.history_rounded, color: Colors.purple),
+                  SizedBox(width: 12),
+                  Text('Geçmiş'),
+                ]),
+              ),
+              const PopupMenuItem(
+                value: 'notifications',
+                child: Row(children: [
+                  Icon(Icons.notifications_outlined, color: Colors.orange),
+                  SizedBox(width: 12),
+                  Text('Bildirimler'),
+                ]),
               ),
             ],
           ),
@@ -1278,26 +1631,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 onTap: () {
                   Navigator.pop(context);
                   Navigator.of(context).pushNamed(AppRoutes.myLocation);
-                },
-              ),
-              _drawerItem(
-                context,
-                icon: Icons.history_rounded,
-                color: Colors.purple,
-                title: 'Geçmiş Siparişler',
-                onTap: () {
-                  Navigator.pop(context);
-                  Navigator.of(context).pushNamed(AppRoutes.orderHistory);
-                },
-              ),
-              _drawerItem(
-                context,
-                icon: Icons.person_rounded,
-                color: Colors.indigo,
-                title: 'Profil',
-                onTap: () {
-                  Navigator.pop(context);
-                  Navigator.of(context).pushNamed(AppRoutes.profile);
                 },
               ),
               _drawerItem(
