@@ -47,6 +47,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   Timer? _offerCheckTimer;
   Timer? _breakCheckTimer;
   Order? _currentOffer;
+  bool _offerModalOpen = false;
 
   // Backend'deki gerçek courier ID (lazy-fetch)
   String? _courierId;
@@ -742,6 +743,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   void _showOfferModal(Order order) {
+    setState(() => _offerModalOpen = true);
     _currentOffer = order;
     int remainingSeconds = 30;
     Timer? countdownTimer;
@@ -923,6 +925,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     ).then((_) {
       countdownTimer?.cancel();
       _currentOffer = null;
+      if (mounted) setState(() => _offerModalOpen = false);
     });
   }
 
@@ -1254,8 +1257,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               ),
             ),
 
-          // Alt sipariş kartı
-          if (displayOrder != null)
+          // Alt sipariş kartı (teklif modal'ı açıkken gizle)
+          if (displayOrder != null && !_offerModalOpen)
             Positioned(
               bottom: 0,
               left: 0,
@@ -1264,7 +1267,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             ),
 
           // Hiç sipariş yoksa bilgi kartı
-          if (displayOrder == null && !_isRefreshing)
+          if (displayOrder == null && !_isRefreshing && !_offerModalOpen)
             Positioned(
               bottom: 24,
               left: 16,
