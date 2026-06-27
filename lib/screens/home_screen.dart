@@ -783,45 +783,48 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
                 Row(children: [
                   Expanded(
-                    child: ElevatedButton(
+                    child: ElevatedButton.icon(
                       onPressed: () {
                         countdownTimer?.cancel();
                         Navigator.pop(ctx);
                         _rejectOffer(order.id);
                       },
+                      icon: const Icon(Icons.close, size: 18),
+                      label: const Text('Reddet'),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.grey.shade200,
-                        foregroundColor: Colors.black87,
+                        backgroundColor: Colors.red.shade50,
+                        foregroundColor: Colors.red,
                         padding: const EdgeInsets.symmetric(vertical: 14),
+                        side: BorderSide(color: Colors.red.shade300),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
                       ),
-                      child: const Text('Reddet'),
                     ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     flex: 2,
-                    child: ElevatedButton(
+                    child: ElevatedButton.icon(
                       onPressed: () {
                         countdownTimer?.cancel();
                         Navigator.pop(ctx);
                         _acceptOffer(order.id);
                       },
+                      icon: const Icon(Icons.check, size: 18),
+                      label: const Text(
+                        'Kabul Et',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.green,
                         foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      child: const Text(
-                        '✅ Kabul Et',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
                         ),
                       ),
                     ),
@@ -856,30 +859,61 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             ),
           );
         }
+      } else {
+        String errorMsg = 'Sipariş alınamadı';
+        try {
+          final data = json.decode(response.body) as Map<String, dynamic>;
+          errorMsg = data['message']?.toString() ?? errorMsg;
+        } catch (_) {}
+
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              icon: const Icon(Icons.error_outline,
+                  color: Colors.orange, size: 48),
+              title: const Text('Sipariş Alınamadı'),
+              content: Text(errorMsg, textAlign: TextAlign.center),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Tamam'),
+                ),
+              ],
+            ),
+          );
+        }
       }
     } catch (e) {
       debugPrint('Teklif kabul hatası: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Hata: $e')),
+        );
+      }
     }
   }
 
   Future<void> _rejectOffer(String orderId, {bool isTimeout = false}) async {
     try {
       final token = await StorageService.getToken();
-      await http.post(
+      final response = await http.post(
         Uri.parse('${AppConstants.apiBaseUrl}/orders/$orderId/reject-offer'),
         headers: {'Authorization': 'Bearer $token'},
       );
+
+      if ((response.statusCode == 200 || response.statusCode == 201) &&
+          !isTimeout &&
+          mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Sipariş reddedildi'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
     } catch (e) {
       debugPrint('Teklif red hatası: $e');
-    }
-
-    if (!isTimeout && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Sipariş reddedildi'),
-          backgroundColor: Colors.orange,
-        ),
-      );
     }
   }
 
@@ -945,45 +979,30 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ],
         ),
         actions: [
-          // Durum pill butonu (Online / Molada / Offline)
-          Padding(
-            padding: const EdgeInsets.only(right: 4),
+          // Durum simgesi (Online / Molada / Offline)
+          Tooltip(
+            message: _statusText,
             child: GestureDetector(
               onTap: _showStatusMenu,
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 250),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-                decoration: BoxDecoration(
-                  color: _statusColor.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: _statusColor),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 250),
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: _statusColor,
-                        shape: BoxShape.circle,
-                      ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 250),
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: _statusColor.withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: _statusColor, width: 1.5),
+                  ),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 250),
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      color: _statusColor,
+                      shape: BoxShape.circle,
                     ),
-                    const SizedBox(width: 5),
-                    Text(
-                      _statusText,
-                      style: TextStyle(
-                        color: _statusColor,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(width: 2),
-                    Icon(Icons.arrow_drop_down,
-                        size: 16, color: _statusColor),
-                  ],
+                  ),
                 ),
               ),
             ),

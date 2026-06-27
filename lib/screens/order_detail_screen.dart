@@ -66,13 +66,18 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
 
       if (!mounted) return;
 
-      if (acceptResponse.statusCode == 200 || acceptResponse.statusCode == 201) {
-        // 2. Otomatik olarak yola çıktı (assigned → picked_up)
-        await http.patch(
-          Uri.parse('${AppConstants.apiBaseUrl}/orders/${order.id}/status'),
-          headers: headers,
-          body: '{"status":"picked_up"}',
-        );
+      // 200/201 = kabul edildi, 409 = zaten kabul edilmiş → her ikisinde de devam et
+      if (acceptResponse.statusCode == 200 ||
+          acceptResponse.statusCode == 201 ||
+          acceptResponse.statusCode == 409) {
+        // 2. Otomatik olarak picked_up yap (hata olsa bile devam et)
+        try {
+          await http.patch(
+            Uri.parse('${AppConstants.apiBaseUrl}/orders/${order.id}/status'),
+            headers: headers,
+            body: '{"status":"picked_up"}',
+          );
+        } catch (_) {}
 
         await ref.read(ordersProvider.notifier).loadOrders();
         if (!mounted) return;
@@ -84,10 +89,20 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
         );
         Navigator.pop(context);
       } else {
+        final errorMsg = () {
+          try {
+            final data =
+                json.decode(acceptResponse.body) as Map<String, dynamic>;
+            return data['message']?.toString() ?? 'Sipariş alınamadı';
+          } catch (_) {
+            return 'Sipariş alınamadı (${acceptResponse.statusCode})';
+          }
+        }();
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('❌ Sipariş alınamadı!'),
+          SnackBar(
+            content: Text('❌ $errorMsg'),
             backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
           ),
         );
       }
@@ -109,8 +124,8 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
           return;
         }
 
-        // Sipariş hâlâ "assigned" durumundaysa önce picked_up yap
-        if (order.status == 'assigned') {
+        // assigned veya picked_up dışında ise picked_up ara adımını dene
+        if (order.status == 'assigned' || order.status == 'picked_up') {
           debugPrint('🔄 Önce picked_up yapılıyor...');
           final token = await StorageService.getToken();
           final pickupResponse = await http.patch(
@@ -124,8 +139,10 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
           );
           debugPrint('📥 Picked_up response: ${pickupResponse.statusCode}');
 
+          // 400 = zaten picked_up durumunda, sorun yok — devam et
           if (pickupResponse.statusCode != 200 &&
-              pickupResponse.statusCode != 201) {
+              pickupResponse.statusCode != 201 &&
+              pickupResponse.statusCode != 400) {
             throw Exception(
                 'picked_up yapılamadı (${pickupResponse.statusCode})');
           }
